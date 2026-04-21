@@ -44,6 +44,15 @@ export class BookingsService {
     }
 
     const savedBooking = await this.bookingsRepository.save(booking);
+
+    if (!isAutoAccept) {
+      this.notificationsService.notifyDriverNewRequest(trip.driver.id, {
+        bookingId: savedBooking.id,
+        passengerId,
+        tripId,
+      });
+    }
+
     return this.mapToResponseDto(savedBooking);
   }
 
