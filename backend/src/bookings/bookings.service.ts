@@ -45,10 +45,14 @@ export class BookingsService {
 
     const savedBooking = await this.bookingsRepository.save(booking);
 
+    // TODO: Emitir evento por Socket.io para que el conductor reciba una
+    // notificación push en tiempo real cuando alguien reserve.
     if (!isAutoAccept) {
+      // Solo notificar al conductor si requiere aprobación manual
       this.notificationsService.notifyDriverNewRequest(trip.driver.id, {
         bookingId: savedBooking.id,
         passengerId,
+        passengerName: passenger.name,
         tripId,
       });
     }
@@ -73,7 +77,6 @@ export class BookingsService {
     await this.tripsRepository.save(booking.trip);
     const savedBooking = await this.bookingsRepository.save(booking);
 
-    // Integración Real-Time
     this.notificationsService.notifyPassengerStatusChange(booking.passenger.id, {
       bookingId: savedBooking.id,
       status: savedBooking.status
@@ -101,7 +104,6 @@ export class BookingsService {
 
     const savedBooking = await this.bookingsRepository.save(booking);
 
-    // Integración Real-Time
     this.notificationsService.notifyPassengerStatusChange(booking.passenger.id, {
       bookingId: savedBooking.id,
       status: savedBooking.status
