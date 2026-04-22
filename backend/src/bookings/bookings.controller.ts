@@ -22,6 +22,11 @@ export class BookingsController {
     return this.bookingsService.rejectBooking(bookingId, req.user.id);
   }
 
+  @Patch(':bookingId/cancel')
+  cancelBooking(@Param('bookingId') bookingId: string, @Req() req) {
+    return this.bookingsService.cancelBooking(bookingId, req.user.id);
+  }
+
   @Get('me')
   getMyBookings(@Req() req) {
     return this.bookingsService.getMyBookings(req.user.id);

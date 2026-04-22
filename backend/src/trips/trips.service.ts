@@ -1,6 +1,6 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Between, In, Repository } from 'typeorm';
 import { Trip, TripStatus } from './entities/trip.entity';
 import { CreateTripDto } from './dto/create-trip.dto';
 import { UsersService } from '../users/users.service';
@@ -28,6 +28,24 @@ export class TripsService {
       throw new ForbiddenException('Debes registrar un vehículo para publicar viajes');
     }
 
+    const requestedDay = new Date(createTripDto.departureTime);
+    const startOfDay = new Date(requestedDay);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(requestedDay);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const existingTrip = await this.tripsRepository.findOne({
+      where: {
+        driver: { id: userId },
+        status: In([TripStatus.SCHEDULED, TripStatus.ACTIVE]),
+        departureTime: Between(startOfDay, endOfDay),
+      },
+    });
+
+    if (existingTrip) {
+      throw new ConflictException('Ya tienes un viaje programado para ese día');
+    }
+
     const trip = this.tripsRepository.create({
       driver: user,
       routePolyline: this.geoService.createLineString(createTripDto.route),
@@ -35,6 +53,7 @@ export class TripsService {
       autoAccept: createTripDto.autoAccept || false,
       availableSeats: createTripDto.availableSeats ?? user.vehicle.capacity,
       maxDetourMinutes: createTripDto.maxDetourMinutes ?? 5,
+      meetingPoint: createTripDto.meetingPoint,
       status: TripStatus.SCHEDULED,
     });
     // TODO: Integrar Google Maps Directions API para obtener el Polyline real de la ruta antes de guardar.
@@ -43,22 +62,22 @@ export class TripsService {
   }
 
   async findAvailableTrips(lat: number, lng: number): Promise<any[]> {
-    const { entities, raw } = await this.tripsRepository.createQueryBuilder('trip')
+    return this.tripsRepository.createQueryBuilder('trip')
       .leftJoin('trip.driver', 'driver')
       .leftJoin('driver.vehicle', 'vehicle')
-      // Poblamos datos selectivos para no exponer seguridad
       .addSelect(['driver.id', 'driver.name', 'vehicle.model', 'vehicle.color'])
-      .addSelect(this.geoService.getClosestPointQuery('trip."routePolyline"', lat, lng), 'meetingPoint')
       .where('trip.status = :status', { status: TripStatus.SCHEDULED })
       .andWhere('trip.availableSeats > 0')
       .andWhere(this.geoService.getDWithinCondition('trip."routePolyline"', lat, lng, 500))
-      .getRawAndEntities();
+      .getMany();
+  }
 
-    // Attach raw projected meeting point to entities for API response
-    return entities.map((entity, index) => ({
-      ...entity,
-      meetingPoint: raw[index].meetingPoint,
-    }));
+  async getMyTrips(driverId: string): Promise<Trip[]> {
+    return this.tripsRepository.find({
+      where: { driver: { id: driverId } },
+      relations: ['bookings', 'bookings.passenger'],
+      order: { departureTime: 'DESC' },
+    });
   }
 
   async cancelTrip(tripId: string, driverId: string): Promise<Trip> {

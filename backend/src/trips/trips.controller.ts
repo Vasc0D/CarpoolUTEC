@@ -19,6 +19,11 @@ export class TripsController {
     return this.tripsService.findAvailableTrips(parseFloat(lat), parseFloat(lng));
   }
 
+  @Get('my-trips')
+  getMyTrips(@Req() req) {
+    return this.tripsService.getMyTrips(req.user.id);
+  }
+
   @Patch(':tripId/cancel')
   cancelTrip(@Param('tripId') tripId: string, @Req() req) {
     return this.tripsService.cancelTrip(tripId, req.user.id);

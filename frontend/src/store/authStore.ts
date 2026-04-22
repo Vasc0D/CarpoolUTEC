@@ -13,9 +13,11 @@ interface AuthState {
     token: string | null;
     isDriver: boolean;
     appMode: 'driver' | 'passenger';
+    _hasHydrated: boolean;
     login: (token: string, user: User, isDriver?: boolean) => void;
     logout: () => void;
     setAppMode: (mode: 'driver' | 'passenger') => void;
+    setHasHydrated: (state: boolean) => void;
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -25,13 +27,25 @@ export const useAuthStore = create<AuthState>()(
             token: null,
             isDriver: false,
             appMode: 'passenger',
+            _hasHydrated: false,
             login: (token, user, isDriver) => set({ token, user, isDriver: isDriver || false }),
             logout: () => set({ user: null, token: null, isDriver: false, appMode: 'passenger' }),
             setAppMode: (mode) => set({ appMode: mode }),
+            setHasHydrated: (state) => set({ _hasHydrated: state }),
         }),
         {
-            name: 'carpool-auth-storage', // Key para el async storage
+            name: 'carpool-auth-storage',
             storage: createJSONStorage(() => AsyncStorage),
+            // Only persist auth data — _hasHydrated must always start false
+            partialize: (state) => ({
+                user: state.user,
+                token: state.token,
+                isDriver: state.isDriver,
+                appMode: state.appMode,
+            }),
+            onRehydrateStorage: () => (state) => {
+                state?.setHasHydrated(true);
+            },
         }
     )
 );

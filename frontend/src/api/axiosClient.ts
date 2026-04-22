@@ -9,14 +9,21 @@ export const axiosClient = axios.create({
 
 axiosClient.interceptors.request.use(
     (config) => {
-        // Tomamos el token estático desde Zustand sin reactividad
         const token = useAuthStore.getState().token;
         if (token) {
             config.headers.Authorization = `Bearer ${token}`;
         }
         return config;
     },
+    (error) => Promise.reject(error)
+);
+
+axiosClient.interceptors.response.use(
+    (response) => response,
     (error) => {
+        if (error.response?.status === 401) {
+            useAuthStore.getState().logout();
+        }
         return Promise.reject(error);
     }
 );

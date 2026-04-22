@@ -43,6 +43,9 @@ export class Trip {
   })
   status: TripStatus;
 
+  @Column({ type: 'text', nullable: true })
+  meetingPoint: string;
+
   @OneToMany(() => Booking, booking => booking.trip)
   bookings: Booking[];
 }

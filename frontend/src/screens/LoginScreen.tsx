@@ -2,7 +2,6 @@ import React, { useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
-import { useNavigation } from '@react-navigation/native';
 import { useAuthStore } from '../store/authStore';
 
 // Mantiene en tracking la sesión si la app es enviada a background
@@ -10,17 +9,14 @@ WebBrowser.maybeCompleteAuthSession();
 
 export const LoginScreen = () => {
     const login = useAuthStore((state) => state.login);
-    const navigation = useNavigation<any>();
 
     useEffect(() => {
         const handleUrl = (event: Linking.EventType) => {
             const data = Linking.parse(event.url);
             if (data.queryParams?.token && data.queryParams?.user) {
                 const user = JSON.parse(decodeURIComponent(data.queryParams.user as string));
-                // 1. Persistimos los datos de sesión globales usando Zustand hook
+                // Persistir sesión — AppNavigator reacciona al token y navega a Home automáticamente
                 login(data.queryParams.token as string, user);
-                // 2. Destruimos el stack de navegaciòn y forzamos Home Page
-                navigation.replace('Home');
             }
         };
 

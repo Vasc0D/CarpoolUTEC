@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, Dimensions, Platform } from 'react-native';
+import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
@@ -9,7 +10,12 @@ import { axiosClient } from '../api/axiosClient';
 
 const { width, height } = Dimensions.get('window');
 
-// Configuración fija
+const MEETING_POINT_OPTIONS = [
+    'Ascensores Torre Principal -2',
+    'Ascensores Segunda Torre -2',
+    'Frente a puerta salida de carros',
+] as const;
+
 const UTEC_COORDS = { latitude: -12.135, longitude: -77.023 };
 const GOOGLE_MAPS_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_KEY || 'DUMMY_KEY';
 
@@ -22,10 +28,18 @@ export const CreateTripScreen = () => {
     const [seats, setSeats] = useState(3);
     const [detour, setDetour] = useState(5);
     const [loading, setLoading] = useState(false);
+    const [departureTime, setDepartureTime] = useState(new Date());
+    const [showTimePicker, setShowTimePicker] = useState(false);
+    const [autoAccept, setAutoAccept] = useState(true);
+    const [meetingPoint, setMeetingPoint] = useState<string | null>(null);
 
     const handlePublish = async () => {
         if (!destination || routePoints.length < 2) {
             Alert.alert('Error', 'Por favor selecciona un destino válido');
+            return;
+        }
+        if (!meetingPoint) {
+            Alert.alert('Error', 'Por favor selecciona un punto de encuentro');
             return;
         }
 
@@ -33,22 +47,31 @@ export const CreateTripScreen = () => {
         try {
             await axiosClient.post('/trips', {
                 route: routePoints,
-                departureTime: new Date().toISOString(),
+                departureTime: departureTime.toISOString(),
                 availableSeats: seats,
                 maxDetourMinutes: detour,
-                autoAccept: true, // Por defecto para este flujo simplificado
+                autoAccept,
+                meetingPoint,
             });
 
             Alert.alert('¡Éxito!', 'Tu viaje ha sido publicado correctamente.', [
                 { text: 'OK', onPress: () => navigation.goBack() }
             ]);
         } catch (error: any) {
-            console.error('Error publicando viaje:', error.response?.data || error.message);
-            Alert.alert('Error', 'No se pudo publicar el viaje. Revisa tu conexión.');
+            const msg = error.response?.data?.message || 'No se pudo publicar el viaje. Revisa tu conexión.';
+            Alert.alert('Error', Array.isArray(msg) ? msg.join('\n') : msg);
         } finally {
             setLoading(false);
         }
     };
+
+    const onTimeChange = (event: DateTimePickerEvent, selected?: Date) => {
+        if (Platform.OS === 'android') setShowTimePicker(false);
+        if (event.type === 'set' && selected) setDepartureTime(selected);
+    };
+
+    const formatTime = (date: Date) =>
+        date.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
 
     return (
         <View style={styles.container}>
@@ -65,7 +88,7 @@ export const CreateTripScreen = () => {
                     }}
                 >
                     <Marker coordinate={UTEC_COORDS} title="Origen (UTEC)" />
-                    
+
                     {destination && (
                         <Marker coordinate={destination} title="Destino">
                             <Ionicons name="location" size={32} color="#EF4444" />
@@ -80,11 +103,8 @@ export const CreateTripScreen = () => {
                             strokeWidth={4}
                             strokeColor="#3B82F6"
                             onReady={(result) => {
-                                // Extraemos los puntos para la base de datos [Lat, Lng]
                                 const points = result.coordinates.map(c => [c.latitude, c.longitude] as [number, number]);
                                 setRoutePoints(points);
-                                
-                                // Ajustar mapa para ver toda la ruta
                                 mapRef.current?.fitToCoordinates(result.coordinates, {
                                     edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
                                 });
@@ -119,7 +139,7 @@ export const CreateTripScreen = () => {
                                 textInput: styles.searchInput,
                                 listView: {
                                     position: 'absolute',
-                                    top: 55, // Por debajo del input
+                                    top: 55,
                                     width: '100%',
                                     backgroundColor: '#FFF',
                                     elevation: 5,
@@ -131,7 +151,75 @@ export const CreateTripScreen = () => {
                         />
                     </View>
 
+                    {/* Punto de encuentro */}
+                    <View style={styles.meetingSection}>
+                        <Text style={styles.label}>Punto de encuentro</Text>
+                        {MEETING_POINT_OPTIONS.map(opt => (
+                            <TouchableOpacity
+                                key={opt}
+                                style={[styles.meetingOption, meetingPoint === opt && styles.meetingOptionActive]}
+                                onPress={() => setMeetingPoint(opt)}
+                                activeOpacity={0.75}
+                            >
+                                <Ionicons
+                                    name={meetingPoint === opt ? 'radio-button-on' : 'radio-button-off'}
+                                    size={18}
+                                    color={meetingPoint === opt ? '#10B981' : '#94A3B8'}
+                                />
+                                <Text style={[styles.meetingOptionText, meetingPoint === opt && styles.meetingOptionTextActive]}>
+                                    {opt}
+                                </Text>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+
                     <View style={styles.controlsAndButton}>
+                        {/* Hora de salida + Admisión */}
+                        <View style={styles.row}>
+                            <View style={styles.inputGroup}>
+                                <Text style={styles.label}>Hora de salida</Text>
+                                <TouchableOpacity
+                                    style={styles.timeButton}
+                                    onPress={() => setShowTimePicker(true)}
+                                >
+                                    <Ionicons name="time-outline" size={18} color="#475569" />
+                                    <Text style={styles.timeButtonText}>{formatTime(departureTime)}</Text>
+                                </TouchableOpacity>
+                                {showTimePicker && (
+                                    <DateTimePicker
+                                        value={departureTime}
+                                        mode="time"
+                                        is24Hour={true}
+                                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                                        onChange={onTimeChange}
+                                    />
+                                )}
+                            </View>
+
+                            <View style={styles.inputGroup}>
+                                <Text style={styles.label}>Admisión</Text>
+                                <View style={styles.toggleGroup}>
+                                    <TouchableOpacity
+                                        style={[styles.toggleOption, autoAccept && styles.toggleOptionActive]}
+                                        onPress={() => setAutoAccept(true)}
+                                    >
+                                        <Text style={[styles.toggleOptionText, autoAccept && styles.toggleOptionTextActive]}>
+                                            Cualquiera
+                                        </Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[styles.toggleOption, !autoAccept && styles.toggleOptionActive]}
+                                        onPress={() => setAutoAccept(false)}
+                                    >
+                                        <Text style={[styles.toggleOptionText, !autoAccept && styles.toggleOptionTextActive]}>
+                                            Solicitud
+                                        </Text>
+                                    </TouchableOpacity>
+                                </View>
+                            </View>
+                        </View>
+
+                        {/* Asientos + Desvío */}
                         <View style={styles.row}>
                             <View style={styles.inputGroup}>
                                 <Text style={styles.label}>Asientos</Text>
@@ -160,8 +248,8 @@ export const CreateTripScreen = () => {
                             </View>
                         </View>
 
-                        <TouchableOpacity 
-                            style={[styles.publishButton, loading && styles.disabledButton]} 
+                        <TouchableOpacity
+                            style={[styles.publishButton, loading && styles.disabledButton]}
                             onPress={handlePublish}
                             disabled={loading}
                         >
@@ -227,7 +315,7 @@ const styles = StyleSheet.create({
     row: {
         flexDirection: 'row',
         justifyContent: 'space-between',
-        marginBottom: 32,
+        marginBottom: 20,
     },
     inputGroup: {
         width: '45%',
@@ -245,6 +333,42 @@ const styles = StyleSheet.create({
         fontWeight: '700',
         color: '#1E293B',
     },
+    timeButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        backgroundColor: '#F1F5F9',
+        borderRadius: 12,
+        padding: 12,
+    },
+    timeButtonText: {
+        fontSize: 16,
+        fontWeight: '700',
+        color: '#1E293B',
+    },
+    toggleGroup: {
+        flexDirection: 'row',
+        backgroundColor: '#F1F5F9',
+        borderRadius: 12,
+        padding: 4,
+    },
+    toggleOption: {
+        flex: 1,
+        paddingVertical: 10,
+        borderRadius: 10,
+        alignItems: 'center',
+    },
+    toggleOptionActive: {
+        backgroundColor: '#10B981',
+    },
+    toggleOptionText: {
+        fontSize: 11,
+        fontWeight: '600',
+        color: '#64748B',
+    },
+    toggleOptionTextActive: {
+        color: '#FFF',
+    },
     publishButton: {
         backgroundColor: '#10B981',
         paddingVertical: 18,
@@ -258,5 +382,36 @@ const styles = StyleSheet.create({
         color: '#FFF',
         fontSize: 18,
         fontWeight: '800',
+    },
+
+    // Meeting point selector
+    meetingSection: {
+        zIndex: 1,
+        marginBottom: 16,
+        gap: 8,
+    },
+    meetingOption: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        backgroundColor: '#F1F5F9',
+        borderRadius: 12,
+        paddingVertical: 12,
+        paddingHorizontal: 14,
+        borderWidth: 1.5,
+        borderColor: 'transparent',
+    },
+    meetingOptionActive: {
+        backgroundColor: '#F0FDF4',
+        borderColor: '#10B981',
+    },
+    meetingOptionText: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: '#475569',
+        flex: 1,
+    },
+    meetingOptionTextActive: {
+        color: '#10B981',
     },
 });

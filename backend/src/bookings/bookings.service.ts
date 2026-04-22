@@ -1,6 +1,6 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Booking, BookingStatus } from './entities/booking.entity';
 import { Trip } from '../trips/entities/trip.entity';
 import { UsersService } from '../users/users.service';
@@ -28,6 +28,17 @@ export class BookingsService {
     if (trip.availableSeats === 0) throw new BadRequestException('El viaje ya está lleno');
     if (trip.driver.id === passengerId) throw new BadRequestException('No puedes reservar tu propio viaje');
 
+    const activeBooking = await this.bookingsRepository.findOne({
+      where: {
+        passenger: { id: passengerId },
+        status: In([BookingStatus.PENDING, BookingStatus.ACCEPTED]),
+      },
+    });
+
+    if (activeBooking) {
+      throw new ConflictException('Ya tienes una reserva activa. Cancélala antes de pedir otro viaje.');
+    }
+
     const passenger = await this.usersService.findById(passengerId);
     if (!passenger) throw new NotFoundException('Pasajero no encontrado');
 
@@ -45,17 +56,15 @@ export class BookingsService {
 
     const savedBooking = await this.bookingsRepository.save(booking);
 
-    // TODO: Emitir evento por Socket.io para que el conductor reciba una
-    // notificación push en tiempo real cuando alguien reserve.
-    if (!isAutoAccept) {
-      // Solo notificar al conductor si requiere aprobación manual
-      this.notificationsService.notifyDriverNewRequest(trip.driver.id, {
-        bookingId: savedBooking.id,
-        passengerId,
-        passengerName: passenger.name,
-        tripId,
-      });
-    }
+    // Notificar al conductor SIEMPRE (tanto autoAccept como manual)
+    // El frontend diferencia con el campo "autoAccepted" para mostrar el mensaje correcto
+    this.notificationsService.notifyDriverNewRequest(trip.driver.id, {
+      bookingId: savedBooking.id,
+      passengerId,
+      passengerName: passenger.name,
+      tripId,
+      autoAccepted: isAutoAccept, // true = ya confirmado, false = requiere aprobación
+    });
 
     return this.mapToResponseDto(savedBooking);
   }
@@ -110,6 +119,29 @@ export class BookingsService {
     });
 
     return this.mapToResponseDto(savedBooking);
+  }
+
+  async cancelBooking(bookingId: string, passengerId: string): Promise<BookingResponseDto> {
+    const booking = await this.bookingsRepository.findOne({
+      where: { id: bookingId },
+      relations: ['trip', 'passenger'],
+    });
+
+    if (!booking) throw new NotFoundException('Reserva no encontrada');
+    if (booking.passenger.id !== passengerId)
+      throw new ForbiddenException('No puedes cancelar una reserva que no es tuya');
+    if ([BookingStatus.CANCELED, BookingStatus.REJECTED].includes(booking.status))
+      throw new BadRequestException('No puedes cancelar esta reserva');
+
+    const wasAccepted = booking.status === BookingStatus.ACCEPTED;
+    booking.status = BookingStatus.CANCELED;
+
+    if (wasAccepted) {
+      booking.trip.availableSeats += 1;
+      await this.tripsRepository.save(booking.trip);
+    }
+
+    return this.mapToResponseDto(await this.bookingsRepository.save(booking));
   }
 
   async getMyBookings(passengerId: string): Promise<BookingResponseDto[]> {
