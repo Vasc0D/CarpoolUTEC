@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Dimensions, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, KeyboardAvoidingView, TouchableOpacity, Alert, Dimensions, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
@@ -10,18 +11,13 @@ import { axiosClient } from '../api/axiosClient';
 
 const { width, height } = Dimensions.get('window');
 
-const MEETING_POINT_OPTIONS = [
-    'Ascensores Torre Principal -2',
-    'Ascensores Segunda Torre -2',
-    'Frente a puerta salida de carros',
-] as const;
-
 const UTEC_COORDS = { latitude: -12.135, longitude: -77.023 };
 const GOOGLE_MAPS_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_KEY || 'DUMMY_KEY';
 
 export const CreateTripScreen = () => {
     const navigation = useNavigation<any>();
     const mapRef = useRef<MapView>(null);
+    const insets = useSafeAreaInsets();
 
     const [destination, setDestination] = useState<any>(null);
     const [routePoints, setRoutePoints] = useState<[number, number][]>([]);
@@ -31,15 +27,10 @@ export const CreateTripScreen = () => {
     const [departureTime, setDepartureTime] = useState(new Date());
     const [showTimePicker, setShowTimePicker] = useState(false);
     const [autoAccept, setAutoAccept] = useState(true);
-    const [meetingPoint, setMeetingPoint] = useState<string | null>(null);
 
     const handlePublish = async () => {
         if (!destination || routePoints.length < 2) {
             Alert.alert('Error', 'Por favor selecciona un destino válido');
-            return;
-        }
-        if (!meetingPoint) {
-            Alert.alert('Error', 'Por favor selecciona un punto de encuentro');
             return;
         }
 
@@ -51,7 +42,7 @@ export const CreateTripScreen = () => {
                 availableSeats: seats,
                 maxDetourMinutes: detour,
                 autoAccept,
-                meetingPoint,
+                meetingPoint: JSON.stringify({ type: 'Point', coordinates: [-77.021908, -12.135570] }),
             });
 
             Alert.alert('¡Éxito!', 'Tu viaje ha sido publicado correctamente.', [
@@ -115,7 +106,10 @@ export const CreateTripScreen = () => {
             </View>
 
             {/* Mitad Inferior: Formulario (Card) */}
-            <View style={styles.formContainer}>
+            <KeyboardAvoidingView
+                style={styles.formContainer}
+                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            >
                 {/* Autocomplete outside ScrollView to avoid nested VirtualizedList warning */}
                 <View style={styles.autocompleteWrapper}>
                     <Text style={styles.label}>¿A dónde vas?</Text>
@@ -135,7 +129,7 @@ export const CreateTripScreen = () => {
                         }}
                         fetchDetails={true}
                         styles={{
-                            container: { flex: 1 },
+                            container: {},
                             textInput: styles.searchInput,
                             listView: {
                                 position: 'absolute',
@@ -151,27 +145,15 @@ export const CreateTripScreen = () => {
                     />
                 </View>
 
-                <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.formContent}>
+                <ScrollView
+                    style={{ flex: 1 }}
+                    keyboardShouldPersistTaps="handled"
+                    contentContainerStyle={[styles.formContent, { paddingBottom: insets.bottom + 24 }]}
+                >
                     {/* Punto de encuentro */}
                     <View style={styles.meetingSection}>
                         <Text style={styles.label}>Punto de encuentro</Text>
-                        {MEETING_POINT_OPTIONS.map(opt => (
-                            <TouchableOpacity
-                                key={opt}
-                                style={[styles.meetingOption, meetingPoint === opt && styles.meetingOptionActive]}
-                                onPress={() => setMeetingPoint(opt)}
-                                activeOpacity={0.75}
-                            >
-                                <Ionicons
-                                    name={meetingPoint === opt ? 'radio-button-on' : 'radio-button-off'}
-                                    size={18}
-                                    color={meetingPoint === opt ? '#10B981' : '#94A3B8'}
-                                />
-                                <Text style={[styles.meetingOptionText, meetingPoint === opt && styles.meetingOptionTextActive]}>
-                                    {opt}
-                                </Text>
-                            </TouchableOpacity>
-                        ))}
+                        <Text style={styles.meetingStaticText}>Frente a la salida de carros UTEC</Text>
                     </View>
 
                     <View style={styles.controlsAndButton}>
@@ -260,7 +242,7 @@ export const CreateTripScreen = () => {
                         </TouchableOpacity>
                     </View>
                 </ScrollView>
-            </View>
+            </KeyboardAvoidingView>
         </View>
     );
 };
@@ -288,7 +270,6 @@ const styles = StyleSheet.create({
     },
     formContent: {
         padding: 24,
-        paddingBottom: 40,
     },
     autocompleteWrapper: {
         zIndex: 10,
@@ -385,34 +366,13 @@ const styles = StyleSheet.create({
         fontWeight: '800',
     },
 
-    // Meeting point selector
     meetingSection: {
         zIndex: 1,
         marginBottom: 16,
-        gap: 8,
     },
-    meetingOption: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 10,
-        backgroundColor: '#F1F5F9',
-        borderRadius: 12,
-        paddingVertical: 12,
-        paddingHorizontal: 14,
-        borderWidth: 1.5,
-        borderColor: 'transparent',
-    },
-    meetingOptionActive: {
-        backgroundColor: '#F0FDF4',
-        borderColor: '#10B981',
-    },
-    meetingOptionText: {
-        fontSize: 13,
-        fontWeight: '600',
-        color: '#475569',
-        flex: 1,
-    },
-    meetingOptionTextActive: {
-        color: '#10B981',
+    meetingStaticText: {
+        fontSize: 14,
+        color: '#374151',
+        marginTop: 4,
     },
 });

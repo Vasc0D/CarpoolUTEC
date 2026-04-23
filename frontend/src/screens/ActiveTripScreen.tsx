@@ -151,7 +151,9 @@ export const ActiveTripScreen = () => {
                     {trip.meetingPoint && (
                         <View style={styles.meetingRow}>
                             <Ionicons name="location-outline" size={14} color="#10B981" />
-                            <Text style={styles.meetingText} numberOfLines={2}>{trip.meetingPoint}</Text>
+                            <Text style={styles.meetingText} numberOfLines={2}>
+                                Frente a la salida de carros UTEC
+                            </Text>
                         </View>
                     )}
 
@@ -175,7 +177,10 @@ export const ActiveTripScreen = () => {
                         </Text>
                         <TouchableOpacity
                             style={styles.modalBtn}
-                            onPress={() => navigation.navigate('Home')}
+                            onPress={() => {
+                                setShowFinishedModal(false);
+                                navigation.reset({ index: 0, routes: [{ name: 'Home' }] });
+                            }}
                         >
                             <Text style={styles.modalBtnText}>Volver al inicio</Text>
                         </TouchableOpacity>
