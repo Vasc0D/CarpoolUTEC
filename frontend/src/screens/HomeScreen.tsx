@@ -343,6 +343,14 @@ export const HomeScreen = () => {
             fetchTrips();
         });
 
+        socket.on('trip_started', (data: { tripId: string }) => {
+            Alert.alert(
+                '¡Tu viaje comenzó!',
+                'El conductor ya está en camino.',
+                [{ text: 'Ver viaje', onPress: () => navigation.navigate('ActiveTrip', { tripId: data.tripId }) }],
+            );
+        });
+
         return () => { socket.disconnect(); socketRef.current = null; };
     }, [appMode, token]);
 

@@ -16,4 +16,12 @@ export class NotificationsService {
   notifyPassengerTripCanceled(passengerId: string, tripData: any) {
     this.notificationsGateway.server.to(passengerId).emit('trip_canceled', tripData);
   }
+
+  notifyPassengerTripStarted(passengerId: string, data: any) {
+    this.notificationsGateway.server.to(passengerId).emit('trip_started', data);
+  }
+
+  notifyPassengerTripFinished(passengerId: string, data: any) {
+    this.notificationsGateway.server.to(passengerId).emit('trip_finished', data);
+  }
 }

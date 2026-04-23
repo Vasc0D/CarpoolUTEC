@@ -1,11 +1,15 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
     View, Text, StyleSheet, FlatList, TouchableOpacity,
     ActivityIndicator, RefreshControl, Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
+import type { Socket } from 'socket.io-client';
 import { axiosClient } from '../api/axiosClient';
+import { createSocket } from '../api/socketClient';
+import { useAuthStore } from '../store/authStore';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -33,6 +37,9 @@ const formatDateTime = (iso: string) => {
         + ' · '
         + d.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
 };
+
+const formatTime = (iso: string) =>
+    new Date(iso).toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
 
 const STATUS_LABEL: Record<DriverTrip['status'], string> = {
     SCHEDULED: 'Programado',
@@ -90,15 +97,25 @@ interface TripCardProps {
     trip: DriverTrip;
     busyBookingId: string | null;
     cancelingTripId: string | null;
+    startingTripId: string | null;
+    finishingTripId: string | null;
     onAccept: (bookingId: string, tripId: string) => void;
     onReject: (bookingId: string, tripId: string) => void;
     onCancel: (tripId: string) => void;
+    onStart: (tripId: string) => void;
+    onFinish: (tripId: string) => void;
 }
 
-const TripCard: React.FC<TripCardProps> = ({ trip, busyBookingId, cancelingTripId, onAccept, onReject, onCancel }) => {
+const TripCard: React.FC<TripCardProps> = ({
+    trip, busyBookingId, cancelingTripId, startingTripId, finishingTripId,
+    onAccept, onReject, onCancel, onStart, onFinish,
+}) => {
     const pending = trip.bookings.filter(b => b.status === 'PENDING');
     const accepted = trip.bookings.filter(b => b.status === 'ACCEPTED').length;
     const isCanceling = cancelingTripId === trip.id;
+    const isStarting = startingTripId === trip.id;
+    const isFinishing = finishingTripId === trip.id;
+    const canStart = trip.status === 'SCHEDULED' && new Date() >= new Date(trip.departureTime);
 
     return (
         <View style={styles.card}>
@@ -151,8 +168,52 @@ const TripCard: React.FC<TripCardProps> = ({ trip, busyBookingId, cancelingTripI
                 </View>
             )}
 
-            {/* Cancel trip — only for cancellable trips */}
-            {(trip.status === 'SCHEDULED' || trip.status === 'ACTIVE') && (
+            {/* Start / Finish buttons */}
+            {trip.status === 'SCHEDULED' && (
+                canStart ? (
+                    <TouchableOpacity
+                        style={styles.startTripBtn}
+                        onPress={() => onStart(trip.id)}
+                        disabled={isStarting}
+                        activeOpacity={0.75}
+                    >
+                        {isStarting ? (
+                            <ActivityIndicator size="small" color="#FFF" />
+                        ) : (
+                            <>
+                                <Ionicons name="play-circle-outline" size={15} color="#FFF" />
+                                <Text style={styles.startTripBtnText}>Iniciar Viaje</Text>
+                            </>
+                        )}
+                    </TouchableOpacity>
+                ) : (
+                    <View style={styles.startTripBtnDisabled}>
+                        <Ionicons name="time-outline" size={15} color="#94A3B8" />
+                        <Text style={styles.startTripBtnDisabledText}>Disponible a las {formatTime(trip.departureTime)}</Text>
+                    </View>
+                )
+            )}
+
+            {trip.status === 'ACTIVE' && (
+                <TouchableOpacity
+                    style={styles.finishTripBtn}
+                    onPress={() => onFinish(trip.id)}
+                    disabled={isFinishing}
+                    activeOpacity={0.75}
+                >
+                    {isFinishing ? (
+                        <ActivityIndicator size="small" color="#FFF" />
+                    ) : (
+                        <>
+                            <Ionicons name="checkmark-circle-outline" size={15} color="#FFF" />
+                            <Text style={styles.finishTripBtnText}>Finalizar Viaje</Text>
+                        </>
+                    )}
+                </TouchableOpacity>
+            )}
+
+            {/* Cancel — only while SCHEDULED */}
+            {trip.status === 'SCHEDULED' && (
                 <TouchableOpacity
                     style={styles.cancelTripBtn}
                     onPress={() => onCancel(trip.id)}
@@ -177,18 +238,24 @@ const TripCard: React.FC<TripCardProps> = ({ trip, busyBookingId, cancelingTripI
 
 export const DriverTripsScreen = () => {
     const insets = useSafeAreaInsets();
+    const { token } = useAuthStore();
+    const socketRef = useRef<Socket | null>(null);
+    const locationWatcherRef = useRef<Location.LocationSubscription | null>(null);
+
     const [trips, setTrips] = useState<DriverTrip[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [busyBookingId, setBusyBookingId] = useState<string | null>(null);
     const [cancelingTripId, setCancelingTripId] = useState<string | null>(null);
+    const [startingTripId, setStartingTripId] = useState<string | null>(null);
+    const [finishingTripId, setFinishingTripId] = useState<string | null>(null);
 
     const fetchTrips = useCallback(async (silent = false) => {
         if (!silent) setLoading(true);
         try {
             const { data } = await axiosClient.get('/trips/my-trips');
             setTrips(data ?? []);
-        } catch (error: any) {
+        } catch {
             Alert.alert('Error', 'No se pudieron cargar tus viajes.');
         } finally {
             setLoading(false);
@@ -197,6 +264,45 @@ export const DriverTripsScreen = () => {
     }, []);
 
     useEffect(() => { fetchTrips(); }, [fetchTrips]);
+
+    // ── Emit driver location every 5s while a trip is ACTIVE ─────────────────
+    const activeTrip = trips.find(t => t.status === 'ACTIVE');
+
+    useEffect(() => {
+        if (!activeTrip || !token) return;
+
+        const socket = createSocket(token);
+        socketRef.current = socket;
+        socket.connect();
+
+        let unmounted = false;
+        Location.requestForegroundPermissionsAsync().then(({ status }) => {
+            if (status !== 'granted' || unmounted) return;
+            Location.watchPositionAsync(
+                { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 0 },
+                (loc) => {
+                    socketRef.current?.emit('driver_location', {
+                        tripId: activeTrip.id,
+                        lat: loc.coords.latitude,
+                        lng: loc.coords.longitude,
+                    });
+                }
+            ).then(sub => {
+                if (unmounted) { sub.remove(); return; }
+                locationWatcherRef.current = sub;
+            });
+        });
+
+        return () => {
+            unmounted = true;
+            locationWatcherRef.current?.remove();
+            locationWatcherRef.current = null;
+            socket.disconnect();
+            socketRef.current = null;
+        };
+    }, [activeTrip?.id, token]);
+
+    // ── Handlers ─────────────────────────────────────────────────────────────
 
     const handleAccept = async (bookingId: string, tripId: string) => {
         setBusyBookingId(bookingId);
@@ -211,6 +317,24 @@ export const DriverTripsScreen = () => {
             }));
         } catch (error: any) {
             const msg = error.response?.data?.message || 'No se pudo aceptar la solicitud.';
+            Alert.alert('Error', Array.isArray(msg) ? msg.join('\n') : msg);
+        } finally {
+            setBusyBookingId(null);
+        }
+    };
+
+    const handleReject = async (bookingId: string, tripId: string) => {
+        setBusyBookingId(bookingId);
+        try {
+            await axiosClient.patch(`/bookings/${bookingId}/reject`);
+            setTrips(prev => prev.map(t => t.id !== tripId ? t : {
+                ...t,
+                bookings: t.bookings.map(b =>
+                    b.id === bookingId ? { ...b, status: 'REJECTED' as const } : b
+                ),
+            }));
+        } catch (error: any) {
+            const msg = error.response?.data?.message || 'No se pudo rechazar la solicitud.';
             Alert.alert('Error', Array.isArray(msg) ? msg.join('\n') : msg);
         } finally {
             setBusyBookingId(null);
@@ -245,22 +369,51 @@ export const DriverTripsScreen = () => {
         );
     };
 
-    const handleReject = async (bookingId: string, tripId: string) => {
-        setBusyBookingId(bookingId);
+    const handleStartTrip = async (tripId: string) => {
+        setStartingTripId(tripId);
         try {
-            await axiosClient.patch(`/bookings/${bookingId}/reject`);
-            setTrips(prev => prev.map(t => t.id !== tripId ? t : {
-                ...t,
-                bookings: t.bookings.map(b =>
-                    b.id === bookingId ? { ...b, status: 'REJECTED' as const } : b
-                ),
-            }));
+            await axiosClient.patch(`/trips/${tripId}/start`);
+            setTrips(prev => prev.map(t =>
+                t.id === tripId ? { ...t, status: 'ACTIVE' as const } : t
+            ));
         } catch (error: any) {
-            const msg = error.response?.data?.message || 'No se pudo rechazar la solicitud.';
+            const msg = error.response?.data?.message || 'No se pudo iniciar el viaje.';
             Alert.alert('Error', Array.isArray(msg) ? msg.join('\n') : msg);
         } finally {
-            setBusyBookingId(null);
+            setStartingTripId(null);
         }
+    };
+
+    const handleFinishTrip = (tripId: string) => {
+        Alert.alert(
+            'Finalizar viaje',
+            '¿Confirmas que el viaje ha terminado?',
+            [
+                { text: 'No', style: 'cancel' },
+                {
+                    text: 'Sí, finalizar',
+                    style: 'destructive',
+                    onPress: async () => {
+                        setFinishingTripId(tripId);
+                        try {
+                            await axiosClient.patch(`/trips/${tripId}/finish`);
+                            locationWatcherRef.current?.remove();
+                            locationWatcherRef.current = null;
+                            socketRef.current?.disconnect();
+                            socketRef.current = null;
+                            setTrips(prev => prev.map(t =>
+                                t.id === tripId ? { ...t, status: 'COMPLETED' as const } : t
+                            ));
+                        } catch (error: any) {
+                            const msg = error.response?.data?.message || 'No se pudo finalizar el viaje.';
+                            Alert.alert('Error', Array.isArray(msg) ? msg.join('\n') : msg);
+                        } finally {
+                            setFinishingTripId(null);
+                        }
+                    },
+                },
+            ]
+        );
     };
 
     if (loading) {
@@ -292,9 +445,13 @@ export const DriverTripsScreen = () => {
                     trip={item}
                     busyBookingId={busyBookingId}
                     cancelingTripId={cancelingTripId}
+                    startingTripId={startingTripId}
+                    finishingTripId={finishingTripId}
                     onAccept={handleAccept}
                     onReject={handleReject}
                     onCancel={handleCancelTrip}
+                    onStart={handleStartTrip}
+                    onFinish={handleFinishTrip}
                 />
             )}
             ListEmptyComponent={
@@ -315,7 +472,6 @@ const styles = StyleSheet.create({
     list: { padding: 16, gap: 12 },
     listEmpty: { flex: 1, justifyContent: 'center' },
 
-    // Trip card
     card: {
         backgroundColor: '#FFF',
         borderRadius: 20,
@@ -336,11 +492,9 @@ const styles = StyleSheet.create({
     modeBadge: { flexDirection: 'row', alignItems: 'center', gap: 3 },
     modeText: { fontSize: 11, color: '#64748B' },
 
-    // Pending section
     pendingSection: { borderTopWidth: 1, borderTopColor: '#F1F5F9', paddingTop: 12, gap: 8 },
     pendingTitle: { fontSize: 12, fontWeight: '700', color: '#F59E0B', marginBottom: 2 },
 
-    // Booking row
     bookingRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
     passengerAvatar: {
         width: 34, height: 34, borderRadius: 17,
@@ -356,23 +510,36 @@ const styles = StyleSheet.create({
     rejectBtn: { backgroundColor: '#FEF2F2', borderWidth: 1, borderColor: '#FECACA' },
     acceptBtn: { backgroundColor: '#10B981' },
 
-    // Cancel trip
+    startTripBtn: {
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+        borderRadius: 12, paddingVertical: 10, backgroundColor: '#10B981', marginTop: 4,
+    },
+    startTripBtnText: { fontSize: 13, fontWeight: '700', color: '#FFF' },
+    startTripBtnDisabled: {
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+        borderRadius: 12, paddingVertical: 10, backgroundColor: '#F1F5F9', marginTop: 4,
+    },
+    startTripBtnDisabledText: { fontSize: 13, fontWeight: '600', color: '#94A3B8' },
+
+    finishTripBtn: {
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+        borderRadius: 12, paddingVertical: 10, backgroundColor: '#0EA5E9', marginTop: 4,
+    },
+    finishTripBtnText: { fontSize: 13, fontWeight: '700', color: '#FFF' },
+
     cancelTripBtn: {
         flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
         borderWidth: 1, borderColor: '#FECACA', borderRadius: 12,
-        paddingVertical: 10, backgroundColor: '#FFF5F5',
-        marginTop: 4,
+        paddingVertical: 10, backgroundColor: '#FFF5F5', marginTop: 4,
     },
     cancelTripBtnText: { fontSize: 13, fontWeight: '700', color: '#EF4444' },
 
-    // Empty bookings
     emptyBookings: {
         flexDirection: 'row', alignItems: 'center', gap: 6,
         borderTopWidth: 1, borderTopColor: '#F1F5F9', paddingTop: 10,
     },
     emptyBookingsText: { fontSize: 12, color: '#94A3B8' },
 
-    // Empty state
     emptyState: { alignItems: 'center', gap: 10, paddingHorizontal: 40 },
     emptyTitle: { fontSize: 18, fontWeight: '800', color: '#334155' },
     emptySubtitle: { fontSize: 14, color: '#94A3B8', textAlign: 'center', lineHeight: 20 },

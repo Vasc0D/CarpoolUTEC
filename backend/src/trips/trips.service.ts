@@ -1,4 +1,4 @@
-import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, In, Repository } from 'typeorm';
 import { Trip, TripStatus } from './entities/trip.entity';
@@ -70,6 +70,60 @@ export class TripsService {
       .andWhere('trip.availableSeats > 0')
       .andWhere(this.geoService.getDWithinCondition('trip."routePolyline"', lat, lng, 500))
       .getMany();
+  }
+
+  async findOne(tripId: string): Promise<Trip> {
+    const trip = await this.tripsRepository.findOne({
+      where: { id: tripId },
+      relations: ['driver'],
+    });
+    if (!trip) throw new NotFoundException('Viaje no encontrado');
+    return trip;
+  }
+
+  async startTrip(tripId: string, driverId: string): Promise<Trip> {
+    const trip = await this.tripsRepository.findOne({
+      where: { id: tripId },
+      relations: ['driver', 'bookings', 'bookings.passenger'],
+    });
+
+    if (!trip) throw new NotFoundException('Viaje no encontrado');
+    if (trip.driver.id !== driverId) throw new ForbiddenException('Solo el conductor puede iniciar el viaje');
+    if (trip.status !== TripStatus.SCHEDULED) throw new BadRequestException('El viaje no está en estado SCHEDULED');
+    if (new Date() < new Date(trip.departureTime)) throw new BadRequestException('Aún no es la hora de salida');
+
+    trip.status = TripStatus.ACTIVE;
+    const saved = await this.tripsRepository.save(trip);
+
+    for (const booking of trip.bookings) {
+      if (booking.status === BookingStatus.ACCEPTED) {
+        this.notificationsService.notifyPassengerTripStarted(booking.passenger.id, { tripId });
+      }
+    }
+
+    return saved;
+  }
+
+  async finishTrip(tripId: string, driverId: string): Promise<Trip> {
+    const trip = await this.tripsRepository.findOne({
+      where: { id: tripId },
+      relations: ['driver', 'bookings', 'bookings.passenger'],
+    });
+
+    if (!trip) throw new NotFoundException('Viaje no encontrado');
+    if (trip.driver.id !== driverId) throw new ForbiddenException('Solo el conductor puede finalizar el viaje');
+    if (trip.status !== TripStatus.ACTIVE) throw new BadRequestException('El viaje no está en curso');
+
+    trip.status = TripStatus.COMPLETED;
+    const saved = await this.tripsRepository.save(trip);
+
+    for (const booking of trip.bookings) {
+      if (booking.status === BookingStatus.ACCEPTED) {
+        this.notificationsService.notifyPassengerTripFinished(booking.passenger.id, { tripId });
+      }
+    }
+
+    return saved;
   }
 
   async getMyTrips(driverId: string): Promise<Trip[]> {

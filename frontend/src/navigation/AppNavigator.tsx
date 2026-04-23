@@ -10,7 +10,8 @@ import { CreateTripScreen } from '../screens/CreateTripScreen';
 import { AddVehicleScreen } from '../screens/AddVehicleScreen';
 import { DriverTripsScreen } from '../screens/DriverTripsScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
-import { MyBookingsScreen } from '../screens/MyBookingsScreen';
+import { MyTripsScreen } from '../screens/MyTripsScreen';
+import { ActiveTripScreen } from '../screens/ActiveTripScreen';
 
 export type RootStackParamList = {
   Login: undefined;
@@ -20,6 +21,7 @@ export type RootStackParamList = {
   DriverTrips: undefined;
   Profile: undefined;
   MyBookings: undefined;
+  ActiveTrip: { tripId: string };
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -73,7 +75,8 @@ export const AppNavigator = () => {
           <Stack.Screen name="AddVehicle" component={AddVehicleScreen} options={{ title: 'Vehículo' }} />
           <Stack.Screen name="DriverTrips" component={DriverTripsScreen} options={{ title: 'Mis Viajes' }} />
           <Stack.Screen name="Profile" component={ProfileScreen} options={{ title: 'Mi Perfil' }} />
-          <Stack.Screen name="MyBookings" component={MyBookingsScreen} options={{ title: 'Mis Reservas' }} />
+          <Stack.Screen name="MyBookings" component={MyTripsScreen} options={{ title: 'Mis Viajes' }} />
+          <Stack.Screen name="ActiveTrip" component={ActiveTripScreen} options={{ headerShown: false }} />
         </>
       )}
     </Stack.Navigator>

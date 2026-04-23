@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, Dimensions, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Dimensions, Platform } from 'react-native';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
@@ -116,41 +116,42 @@ export const CreateTripScreen = () => {
 
             {/* Mitad Inferior: Formulario (Card) */}
             <View style={styles.formContainer}>
-                <View style={styles.formContent}>
-                    <View style={styles.autocompleteWrapper}>
-                        <Text style={styles.label}>¿A dónde vas?</Text>
-                        <GooglePlacesAutocomplete
-                            placeholder="Buscar destino..."
-                            onPress={(data, details = null) => {
-                                if (details) {
-                                    setDestination({
-                                        latitude: details.geometry.location.lat,
-                                        longitude: details.geometry.location.lng,
-                                    });
-                                }
-                            }}
-                            query={{
-                                key: GOOGLE_MAPS_KEY,
-                                language: 'es',
-                            }}
-                            fetchDetails={true}
-                            styles={{
-                                container: { flex: 1 },
-                                textInput: styles.searchInput,
-                                listView: {
-                                    position: 'absolute',
-                                    top: 55,
-                                    width: '100%',
-                                    backgroundColor: '#FFF',
-                                    elevation: 5,
-                                    zIndex: 1000,
-                                    borderRadius: 12,
-                                },
-                            }}
-                            keyboardShouldPersistTaps="handled"
-                        />
-                    </View>
+                {/* Autocomplete outside ScrollView to avoid nested VirtualizedList warning */}
+                <View style={styles.autocompleteWrapper}>
+                    <Text style={styles.label}>¿A dónde vas?</Text>
+                    <GooglePlacesAutocomplete
+                        placeholder="Buscar destino..."
+                        onPress={(_data, details = null) => {
+                            if (details) {
+                                setDestination({
+                                    latitude: details.geometry.location.lat,
+                                    longitude: details.geometry.location.lng,
+                                });
+                            }
+                        }}
+                        query={{
+                            key: GOOGLE_MAPS_KEY,
+                            language: 'es',
+                        }}
+                        fetchDetails={true}
+                        styles={{
+                            container: { flex: 1 },
+                            textInput: styles.searchInput,
+                            listView: {
+                                position: 'absolute',
+                                top: 55,
+                                width: '100%',
+                                backgroundColor: '#FFF',
+                                elevation: 5,
+                                zIndex: 1000,
+                                borderRadius: 12,
+                            },
+                        }}
+                        keyboardShouldPersistTaps="handled"
+                    />
+                </View>
 
+                <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.formContent}>
                     {/* Punto de encuentro */}
                     <View style={styles.meetingSection}>
                         <Text style={styles.label}>Punto de encuentro</Text>
@@ -258,7 +259,7 @@ export const CreateTripScreen = () => {
                             </Text>
                         </TouchableOpacity>
                     </View>
-                </View>
+                </ScrollView>
             </View>
         </View>
     );
@@ -286,17 +287,17 @@ const styles = StyleSheet.create({
         elevation: 10,
     },
     formContent: {
-        flex: 1,
         padding: 24,
+        paddingBottom: 40,
     },
     autocompleteWrapper: {
         zIndex: 10,
-        flex: 1,
-        marginBottom: 16,
+        paddingHorizontal: 24,
+        paddingTop: 16,
+        marginBottom: 4,
     },
     controlsAndButton: {
         zIndex: 1,
-        justifyContent: 'flex-end',
         paddingBottom: 20,
     },
     label: {

@@ -24,8 +24,23 @@ export class TripsController {
     return this.tripsService.getMyTrips(req.user.id);
   }
 
+  @Get(':tripId')
+  findOne(@Param('tripId') tripId: string) {
+    return this.tripsService.findOne(tripId);
+  }
+
   @Patch(':tripId/cancel')
   cancelTrip(@Param('tripId') tripId: string, @Req() req) {
     return this.tripsService.cancelTrip(tripId, req.user.id);
+  }
+
+  @Patch(':tripId/start')
+  startTrip(@Param('tripId') tripId: string, @Req() req) {
+    return this.tripsService.startTrip(tripId, req.user.id);
+  }
+
+  @Patch(':tripId/finish')
+  finishTrip(@Param('tripId') tripId: string, @Req() req) {
+    return this.tripsService.finishTrip(tripId, req.user.id);
   }
 }
