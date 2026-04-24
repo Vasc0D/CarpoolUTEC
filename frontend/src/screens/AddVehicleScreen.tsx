@@ -1,20 +1,24 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, Alert, SafeAreaView, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { axiosClient } from '../api/axiosClient';
 import { useAuthStore } from '../store/authStore';
 
 export const AddVehicleScreen = () => {
     const navigation = useNavigation<any>();
+    const route = useRoute<any>();
+    const existingVehicle = route.params?.vehicle ?? null;
+    const isEditing = !!existingVehicle;
+
     const { token, user, login } = useAuthStore();
     const [loading, setLoading] = useState(false);
 
     const [form, setForm] = useState({
-        plate: '',
-        brand: '',
-        model: '',
-        color: '',
-        capacity: '4', // Matches capacity from backend
+        plate: existingVehicle?.plate ?? '',
+        brand: existingVehicle?.brand ?? '',
+        model: existingVehicle?.model ?? '',
+        color: existingVehicle?.color ?? '',
+        capacity: existingVehicle?.capacity?.toString() ?? '4',
     });
 
     const handleSave = async () => {
@@ -33,18 +37,18 @@ export const AddVehicleScreen = () => {
                 capacity: parseInt(form.capacity, 10),
             });
 
-            // Actualizamos Zustand para marcar que este usuario ya es conductor
-            // Usamos persistencia, reactivamos sesión con flag true
             if (token && user) {
                 login(token, user, true);
             }
 
-            Alert.alert('¡Felicidades!', 'Tu auto ha sido registrado con éxito.', [
-                { text: 'OK', onPress: () => navigation.goBack() }
-            ]);
+            Alert.alert(
+                isEditing ? '¡Actualizado!' : '¡Felicidades!',
+                isEditing ? 'Tu vehículo ha sido actualizado con éxito.' : 'Tu auto ha sido registrado con éxito.',
+                [{ text: 'OK', onPress: () => navigation.goBack() }],
+            );
         } catch (error: any) {
             console.error('Error al guardar vehículo:', error.response?.data || error.message);
-            Alert.alert('Error', 'Hubo un problema registrando tu auto.');
+            Alert.alert('Error', 'Hubo un problema guardando los datos del vehículo.');
         } finally {
             setLoading(false);
         }
@@ -52,13 +56,17 @@ export const AddVehicleScreen = () => {
 
     return (
         <SafeAreaView style={styles.safeArea}>
-            <KeyboardAvoidingView 
-                style={{ flex: 1 }} 
+            <KeyboardAvoidingView
+                style={{ flex: 1 }}
                 behavior={Platform.OS === 'ios' ? 'padding' : undefined}
             >
                 <ScrollView contentContainerStyle={styles.container}>
-                    <Text style={styles.title}>Registrar mi Auto</Text>
-                    <Text style={styles.subtitle}>Completa los datos de tu vehículo para empezar a ofrecer viajes.</Text>
+                    <Text style={styles.title}>{isEditing ? 'Editar mi Auto' : 'Registrar mi Auto'}</Text>
+                    <Text style={styles.subtitle}>
+                        {isEditing
+                            ? 'Actualiza los datos de tu vehículo.'
+                            : 'Completa los datos de tu vehículo para empezar a ofrecer viajes.'}
+                    </Text>
 
                     <View style={styles.inputGroup}>
                         <Text style={styles.label}>Placa</Text>
@@ -118,7 +126,7 @@ export const AddVehicleScreen = () => {
                         disabled={loading}
                     >
                         <Text style={styles.saveButtonText}>
-                            {loading ? 'Guardando...' : 'Guardar y Continuar'}
+                            {loading ? 'Guardando...' : isEditing ? 'Guardar Cambios' : 'Guardar y Continuar'}
                         </Text>
                     </TouchableOpacity>
                 </ScrollView>

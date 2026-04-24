@@ -17,7 +17,9 @@ export type RootStackParamList = {
   Login: undefined;
   Home: undefined;
   CreateTrip: undefined;
-  AddVehicle: undefined;
+  AddVehicle: {
+    vehicle?: { plate: string; brand: string; model: string; color: string; capacity: number };
+  } | undefined;
   DriverTrips: undefined;
   Profile: undefined;
   MyBookings: undefined;

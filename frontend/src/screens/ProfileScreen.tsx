@@ -116,7 +116,7 @@ export const ProfileScreen = () => {
 
                         <TouchableOpacity
                             style={styles.editBtn}
-                            onPress={() => navigation.navigate('AddVehicle')}
+                            onPress={() => navigation.navigate('AddVehicle', { vehicle })}
                         >
                             <Ionicons name="pencil-outline" size={14} color="#10B981" />
                             <Text style={styles.editBtnText}>Editar vehículo</Text>

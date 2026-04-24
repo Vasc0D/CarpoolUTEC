@@ -368,6 +368,7 @@ const styles = StyleSheet.create({
 
     meetingSection: {
         zIndex: 1,
+        marginTop: 45,
         marginBottom: 16,
     },
     meetingStaticText: {
