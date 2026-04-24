@@ -19,8 +19,7 @@ const { height } = Dimensions.get('window');
 
 interface TripMarker {
     id: string;
-    driver: { id: string; name: string };
-    vehicle?: { model: string; color: string };
+    driver: { id: string; name: string; vehicle?: { model: string; color: string; brand: string; plate: string } };
     availableSeats: number;
     departureTime: string;
     meetingPoint: string | null;
@@ -147,9 +146,9 @@ const TripSheet: React.FC<TripSheetProps> = ({
                             </View>
                             <View style={styles.driverInfo}>
                                 <Text style={styles.driverName}>{trip.driver.name}</Text>
-                                {trip.vehicle && (
+                                {trip.driver.vehicle && (
                                     <Text style={styles.vehicleText}>
-                                        {trip.vehicle.color} · {trip.vehicle.model}
+                                        {trip.driver.vehicle.brand} · {trip.driver.vehicle.model} · {trip.driver.vehicle.color} · {trip.driver.vehicle.plate}
                                     </Text>
                                 )}
                             </View>

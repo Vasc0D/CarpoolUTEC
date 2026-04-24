@@ -66,7 +66,7 @@ export class TripsService {
     return this.tripsRepository.createQueryBuilder('trip')
       .leftJoin('trip.driver', 'driver')
       .leftJoin('driver.vehicle', 'vehicle')
-      .addSelect(['driver.id', 'driver.name', 'vehicle.model', 'vehicle.color'])
+      .addSelect(['driver.id', 'driver.name', 'vehicle.model', 'vehicle.color', 'vehicle.brand', 'vehicle.plate'])
       .where('trip.status = :status', { status: TripStatus.SCHEDULED })
       .andWhere('trip.availableSeats > 0')
       .andWhere('trip.departureTime > :now', { now: new Date() })

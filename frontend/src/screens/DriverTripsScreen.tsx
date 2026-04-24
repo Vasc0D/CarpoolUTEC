@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
     View, Text, StyleSheet, FlatList, TouchableOpacity,
-    ActivityIndicator, RefreshControl, Alert,
+    ActivityIndicator, RefreshControl, Alert, Linking,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -28,6 +28,7 @@ interface DriverTrip {
     availableSeats: number;
     autoAccept: boolean;
     bookings: BookingItem[];
+    routePolyline?: { coordinates: number[][] };
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -105,7 +106,7 @@ interface TripCardProps {
     onAccept: (bookingId: string, tripId: string) => void;
     onReject: (bookingId: string, tripId: string) => void;
     onCancel: (tripId: string) => void;
-    onStart: (tripId: string) => void;
+    onStart: (trip: DriverTrip) => void;
     onFinish: (tripId: string) => void;
     onNoShow: (bookingId: string, tripId: string) => void;
 }
@@ -231,7 +232,7 @@ const TripCard: React.FC<TripCardProps> = ({
                 ) : canStart ? (
                     <TouchableOpacity
                         style={styles.startTripBtn}
-                        onPress={() => onStart(trip.id)}
+                        onPress={() => onStart(trip)}
                         disabled={isStarting}
                         activeOpacity={0.75}
                     >
@@ -488,13 +489,39 @@ export const DriverTripsScreen = () => {
         );
     };
 
-    const handleStartTrip = async (tripId: string) => {
-        setStartingTripId(tripId);
+    const handleStartTrip = async (trip: DriverTrip) => {
+        setStartingTripId(trip.id);
         try {
-            await axiosClient.patch(`/trips/${tripId}/start`);
+            await axiosClient.patch(`/trips/${trip.id}/start`);
             setTrips(prev => prev.map(t =>
-                t.id === tripId ? { ...t, status: 'ACTIVE' as const } : t
+                t.id === trip.id ? { ...t, status: 'ACTIVE' as const } : t
             ));
+
+            const coords = trip.routePolyline?.coordinates;
+            if (coords && coords.length > 0) {
+                const last = coords[coords.length - 1];
+                const lng = last[0];
+                const lat = last[1];
+                const wazeUrl = `waze://?ll=${lat},${lng}&navigate=yes`;
+                const googleUrl = `comgooglemaps://?daddr=${lat},${lng}&directionsmode=driving`;
+                const googleFallback = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
+
+                const [wazeOk, googleOk] = await Promise.all([
+                    Linking.canOpenURL(wazeUrl),
+                    Linking.canOpenURL(googleUrl),
+                ]);
+
+                const options: { text: string; onPress: () => void }[] = [];
+                if (wazeOk) options.push({ text: 'Waze', onPress: () => Linking.openURL(wazeUrl) });
+                if (googleOk) {
+                    options.push({ text: 'Google Maps', onPress: () => Linking.openURL(googleUrl) });
+                } else {
+                    options.push({ text: 'Google Maps', onPress: () => Linking.openURL(googleFallback) });
+                }
+                options.push({ text: 'Ahora no', onPress: () => {} });
+
+                Alert.alert('¿Navegar al destino?', 'Elige tu app de navegación', options);
+            }
         } catch (error: any) {
             const msg = error.response?.data?.message || 'No se pudo iniciar el viaje.';
             Alert.alert('Error', Array.isArray(msg) ? msg.join('\n') : msg);
