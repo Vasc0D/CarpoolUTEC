@@ -117,6 +117,13 @@ export class TripsService {
     trip.status = TripStatus.COMPLETED;
     const saved = await this.tripsRepository.save(trip);
 
+    await this.bookingsRepository.createQueryBuilder()
+      .update(Booking)
+      .set({ status: BookingStatus.COMPLETED })
+      .where('trip.id = :tripId', { tripId })
+      .andWhere('status = :status', { status: BookingStatus.ACCEPTED })
+      .execute();
+
     for (const booking of trip.bookings) {
       if (booking.status === BookingStatus.ACCEPTED) {
         this.notificationsService.notifyPassengerTripFinished(booking.passenger.id, { tripId });

@@ -30,7 +30,7 @@ const STATUS_CONFIG: Record<BookingStatus, { label: string; color: string; icon:
     ACCEPTED:  { label: 'Aceptado',    color: '#10B981', icon: 'checkmark-circle-outline' },
     REJECTED:  { label: 'Rechazado',   color: '#EF4444', icon: 'close-circle-outline' },
     CANCELED:  { label: 'Cancelado',   color: '#94A3B8', icon: 'ban-outline' },
-    COMPLETED: { label: 'Completado',  color: '#64748B', icon: 'checkmark-done-outline' },
+    COMPLETED: { label: 'Finalizado',  color: '#3B82F6', icon: 'flag-outline' },
 };
 
 const STATUS_ORDER: Record<BookingStatus, number> = {
