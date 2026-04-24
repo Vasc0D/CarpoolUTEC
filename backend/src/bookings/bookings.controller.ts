@@ -27,6 +27,11 @@ export class BookingsController {
     return this.bookingsService.cancelBooking(bookingId, req.user.id);
   }
 
+  @Patch(':bookingId/no-show')
+  markNoShow(@Param('bookingId') bookingId: string, @Req() req) {
+    return this.bookingsService.markNoShow(bookingId, req.user.id);
+  }
+
   @Get('me')
   getMyBookings(@Req() req) {
     return this.bookingsService.getMyBookings(req.user.id);

@@ -144,6 +144,25 @@ export class BookingsService {
     return this.mapToResponseDto(await this.bookingsRepository.save(booking));
   }
 
+  async markNoShow(bookingId: string, driverId: string): Promise<BookingResponseDto> {
+    const booking = await this.bookingsRepository.findOne({
+      where: { id: bookingId },
+      relations: ['trip', 'trip.driver', 'passenger'],
+    });
+
+    if (!booking) throw new NotFoundException('Reserva no encontrada');
+    if (booking.trip.driver.id !== driverId)
+      throw new ForbiddenException('Solo el conductor puede marcar ausentes');
+    if (booking.status !== BookingStatus.ACCEPTED)
+      throw new BadRequestException('Solo se pueden marcar como ausentes reservas aceptadas');
+
+    booking.status = BookingStatus.CANCELED;
+    booking.trip.availableSeats += 1;
+    await this.tripsRepository.save(booking.trip);
+
+    return this.mapToResponseDto(await this.bookingsRepository.save(booking));
+  }
+
   async getMyBookings(passengerId: string): Promise<BookingResponseDto[]> {
     const bookings = await this.bookingsRepository.find({
       where: { passenger: { id: passengerId } },

@@ -68,6 +68,7 @@ export class TripsService {
       .addSelect(['driver.id', 'driver.name', 'vehicle.model', 'vehicle.color'])
       .where('trip.status = :status', { status: TripStatus.SCHEDULED })
       .andWhere('trip.availableSeats > 0')
+      .andWhere('trip.departureTime > :now', { now: new Date() })
       .andWhere(this.geoService.getDWithinCondition('trip."routePolyline"', lat, lng, 500))
       .getMany();
   }
@@ -90,7 +91,14 @@ export class TripsService {
     if (!trip) throw new NotFoundException('Viaje no encontrado');
     if (trip.driver.id !== driverId) throw new ForbiddenException('Solo el conductor puede iniciar el viaje');
     if (trip.status !== TripStatus.SCHEDULED) throw new BadRequestException('El viaje no está en estado SCHEDULED');
-    if (new Date() < new Date(trip.departureTime)) throw new BadRequestException('Aún no es la hora de salida');
+
+    const minutesLate = (Date.now() - new Date(trip.departureTime).getTime()) / 60000;
+    if (minutesLate < 0) throw new BadRequestException('Aún no es la hora de salida');
+
+    const hasUnboardedPassengers = trip.bookings.some(b => b.status === BookingStatus.ACCEPTED);
+    if (hasUnboardedPassengers && minutesLate < 5) {
+      throw new BadRequestException('Debes esperar 5 minutos después de la hora de salida para iniciar sin todos los pasajeros.');
+    }
 
     trip.status = TripStatus.ACTIVE;
     const saved = await this.tripsRepository.save(trip);

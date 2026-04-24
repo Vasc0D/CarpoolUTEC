@@ -15,7 +15,7 @@ import { useAuthStore } from '../store/authStore';
 
 interface BookingItem {
     id: string;
-    status: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'CANCELED';
+    status: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'CANCELED' | 'COMPLETED';
     passenger: { id: string; name: string };
     createdAt: string;
 }
@@ -95,27 +95,35 @@ const BookingRow: React.FC<BookingRowProps> = ({ booking, onAccept, onReject, bu
 
 interface TripCardProps {
     trip: DriverTrip;
+    now: Date;
     busyBookingId: string | null;
     cancelingTripId: string | null;
     startingTripId: string | null;
     finishingTripId: string | null;
+    noShowingId: string | null;
     onAccept: (bookingId: string, tripId: string) => void;
     onReject: (bookingId: string, tripId: string) => void;
     onCancel: (tripId: string) => void;
     onStart: (tripId: string) => void;
     onFinish: (tripId: string) => void;
+    onNoShow: (bookingId: string, tripId: string) => void;
 }
 
 const TripCard: React.FC<TripCardProps> = ({
-    trip, busyBookingId, cancelingTripId, startingTripId, finishingTripId,
-    onAccept, onReject, onCancel, onStart, onFinish,
+    trip, now, busyBookingId, cancelingTripId, startingTripId, finishingTripId, noShowingId,
+    onAccept, onReject, onCancel, onStart, onFinish, onNoShow,
 }) => {
     const pending = trip.bookings.filter(b => b.status === 'PENDING');
-    const accepted = trip.bookings.filter(b => b.status === 'ACCEPTED').length;
+    const accepted = trip.bookings.filter(b => b.status === 'ACCEPTED');
+
+    const minutesLate = (now.getTime() - new Date(trip.departureTime).getTime()) / 60000;
+    const atDeparture = minutesLate >= 0;
+    const pastGrace = minutesLate >= 5;
+    const canStart = trip.status === 'SCHEDULED' && atDeparture && (accepted.length === 0 || pastGrace);
+
     const isCanceling = cancelingTripId === trip.id;
     const isStarting = startingTripId === trip.id;
     const isFinishing = finishingTripId === trip.id;
-    const canStart = trip.status === 'SCHEDULED' && new Date() >= new Date(trip.departureTime);
 
     return (
         <View style={styles.card}>
@@ -125,7 +133,9 @@ const TripCard: React.FC<TripCardProps> = ({
                     <Text style={styles.cardTime}>{formatDateTime(trip.departureTime)}</Text>
                     <View style={styles.cardMeta}>
                         <Ionicons name="people-outline" size={13} color="#64748B" />
-                        <Text style={styles.cardMetaText}>{trip.availableSeats} asientos libres · {accepted} aceptado{accepted !== 1 ? 's' : ''}</Text>
+                        <Text style={styles.cardMetaText}>
+                            {trip.availableSeats} asientos libres · {accepted.length} aceptado{accepted.length !== 1 ? 's' : ''}
+                        </Text>
                     </View>
                 </View>
                 <View style={{ alignItems: 'flex-end', gap: 6 }}>
@@ -145,8 +155,8 @@ const TripCard: React.FC<TripCardProps> = ({
                 </View>
             </View>
 
-            {/* Pending bookings */}
-            {pending.length > 0 ? (
+            {/* Pending bookings (accept / reject) */}
+            {pending.length > 0 && (
                 <View style={styles.pendingSection}>
                     <Text style={styles.pendingTitle}>
                         {pending.length} solicitud{pending.length !== 1 ? 'es' : ''} pendiente{pending.length !== 1 ? 's' : ''}
@@ -161,16 +171,60 @@ const TripCard: React.FC<TripCardProps> = ({
                         />
                     ))}
                 </View>
-            ) : (
+            )}
+
+            {/* Accepted passengers — visible while SCHEDULED for no-show management */}
+            {trip.status === 'SCHEDULED' && accepted.length > 0 && (
+                <View style={styles.acceptedSection}>
+                    <Text style={styles.acceptedTitle}>
+                        Pasajeros confirmados ({accepted.length})
+                        {!pastGrace && atDeparture && (
+                            <Text style={styles.graceHint}>
+                                {' '}· ausente disponible en {Math.ceil(5 - minutesLate)} min
+                            </Text>
+                        )}
+                    </Text>
+                    {accepted.map(b => (
+                        <View key={b.id} style={styles.bookingRow}>
+                            <View style={styles.passengerAvatar}>
+                                <Text style={styles.passengerAvatarText}>
+                                    {b.passenger.name?.[0]?.toUpperCase() ?? '?'}
+                                </Text>
+                            </View>
+                            <Text style={styles.passengerName} numberOfLines={1}>{b.passenger.name}</Text>
+                            {pastGrace && (
+                                <TouchableOpacity
+                                    style={[styles.actionBtn, styles.rejectBtn]}
+                                    onPress={() => onNoShow(b.id, trip.id)}
+                                    disabled={noShowingId === b.id}
+                                >
+                                    {noShowingId === b.id
+                                        ? <ActivityIndicator size="small" color="#EF4444" />
+                                        : <Ionicons name="close" size={18} color="#EF4444" />}
+                                </TouchableOpacity>
+                            )}
+                        </View>
+                    ))}
+                </View>
+            )}
+
+            {pending.length === 0 && accepted.length === 0 && (
                 <View style={styles.emptyBookings}>
                     <Ionicons name="checkmark-circle-outline" size={15} color="#94A3B8" />
                     <Text style={styles.emptyBookingsText}>Sin solicitudes pendientes</Text>
                 </View>
             )}
 
-            {/* Start / Finish buttons */}
+            {/* Start button — 3 states */}
             {trip.status === 'SCHEDULED' && (
-                canStart ? (
+                !atDeparture ? (
+                    <View style={styles.startTripBtnDisabled}>
+                        <Ionicons name="time-outline" size={15} color="#94A3B8" />
+                        <Text style={styles.startTripBtnDisabledText}>
+                            Disponible a las {formatTime(trip.departureTime)}
+                        </Text>
+                    </View>
+                ) : canStart ? (
                     <TouchableOpacity
                         style={styles.startTripBtn}
                         onPress={() => onStart(trip.id)}
@@ -188,12 +242,15 @@ const TripCard: React.FC<TripCardProps> = ({
                     </TouchableOpacity>
                 ) : (
                     <View style={styles.startTripBtnDisabled}>
-                        <Ionicons name="time-outline" size={15} color="#94A3B8" />
-                        <Text style={styles.startTripBtnDisabledText}>Disponible a las {formatTime(trip.departureTime)}</Text>
+                        <Ionicons name="hourglass-outline" size={15} color="#94A3B8" />
+                        <Text style={styles.startTripBtnDisabledText}>
+                            Esperando {Math.ceil(5 - minutesLate)} min · marca ausentes primero
+                        </Text>
                     </View>
                 )
             )}
 
+            {/* Finish button */}
             {trip.status === 'ACTIVE' && (
                 <TouchableOpacity
                     style={styles.finishTripBtn}
@@ -245,10 +302,18 @@ export const DriverTripsScreen = () => {
     const [trips, setTrips] = useState<DriverTrip[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+    const [now, setNow] = useState(new Date());
     const [busyBookingId, setBusyBookingId] = useState<string | null>(null);
     const [cancelingTripId, setCancelingTripId] = useState<string | null>(null);
     const [startingTripId, setStartingTripId] = useState<string | null>(null);
     const [finishingTripId, setFinishingTripId] = useState<string | null>(null);
+    const [noShowingId, setNoShowingId] = useState<string | null>(null);
+
+    // Refresh `now` every 30 s so grace-period UI updates without a manual refresh
+    useEffect(() => {
+        const interval = setInterval(() => setNow(new Date()), 30_000);
+        return () => clearInterval(interval);
+    }, []);
 
     const fetchTrips = useCallback(async (silent = false) => {
         if (!silent) setLoading(true);
@@ -339,6 +404,38 @@ export const DriverTripsScreen = () => {
         } finally {
             setBusyBookingId(null);
         }
+    };
+
+    const handleNoShow = async (bookingId: string, tripId: string) => {
+        Alert.alert(
+            'Marcar como ausente',
+            '¿Este pasajero no se presentó? Se liberará su asiento.',
+            [
+                { text: 'Cancelar', style: 'cancel' },
+                {
+                    text: 'Marcar ausente',
+                    style: 'destructive',
+                    onPress: async () => {
+                        setNoShowingId(bookingId);
+                        try {
+                            await axiosClient.patch(`/bookings/${bookingId}/no-show`);
+                            setTrips(prev => prev.map(t => t.id !== tripId ? t : {
+                                ...t,
+                                availableSeats: t.availableSeats + 1,
+                                bookings: t.bookings.map(b =>
+                                    b.id === bookingId ? { ...b, status: 'CANCELED' as const } : b
+                                ),
+                            }));
+                        } catch (error: any) {
+                            const msg = error.response?.data?.message || 'No se pudo marcar al pasajero como ausente.';
+                            Alert.alert('Error', Array.isArray(msg) ? msg.join('\n') : msg);
+                        } finally {
+                            setNoShowingId(null);
+                        }
+                    },
+                },
+            ]
+        );
     };
 
     const handleCancelTrip = (tripId: string) => {
@@ -443,15 +540,18 @@ export const DriverTripsScreen = () => {
             renderItem={({ item }) => (
                 <TripCard
                     trip={item}
+                    now={now}
                     busyBookingId={busyBookingId}
                     cancelingTripId={cancelingTripId}
                     startingTripId={startingTripId}
                     finishingTripId={finishingTripId}
+                    noShowingId={noShowingId}
                     onAccept={handleAccept}
                     onReject={handleReject}
                     onCancel={handleCancelTrip}
                     onStart={handleStartTrip}
                     onFinish={handleFinishTrip}
+                    onNoShow={handleNoShow}
                 />
             )}
             ListEmptyComponent={
@@ -476,6 +576,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#FFF',
         borderRadius: 20,
         padding: 16,
+        gap: 0,
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.07,
@@ -492,8 +593,12 @@ const styles = StyleSheet.create({
     modeBadge: { flexDirection: 'row', alignItems: 'center', gap: 3 },
     modeText: { fontSize: 11, color: '#64748B' },
 
-    pendingSection: { borderTopWidth: 1, borderTopColor: '#F1F5F9', paddingTop: 12, gap: 8 },
+    pendingSection: { borderTopWidth: 1, borderTopColor: '#F1F5F9', paddingTop: 12, gap: 8, marginBottom: 8 },
     pendingTitle: { fontSize: 12, fontWeight: '700', color: '#F59E0B', marginBottom: 2 },
+
+    acceptedSection: { borderTopWidth: 1, borderTopColor: '#F1F5F9', paddingTop: 12, gap: 8, marginBottom: 8 },
+    acceptedTitle: { fontSize: 12, fontWeight: '700', color: '#10B981', marginBottom: 2 },
+    graceHint: { fontSize: 11, fontWeight: '400', color: '#94A3B8' },
 
     bookingRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
     passengerAvatar: {
@@ -536,7 +641,7 @@ const styles = StyleSheet.create({
 
     emptyBookings: {
         flexDirection: 'row', alignItems: 'center', gap: 6,
-        borderTopWidth: 1, borderTopColor: '#F1F5F9', paddingTop: 10,
+        borderTopWidth: 1, borderTopColor: '#F1F5F9', paddingTop: 10, marginBottom: 4,
     },
     emptyBookingsText: { fontSize: 12, color: '#94A3B8' },
 
