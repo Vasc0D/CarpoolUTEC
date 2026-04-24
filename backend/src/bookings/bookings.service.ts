@@ -179,13 +179,15 @@ export class BookingsService {
     booking.trip.availableSeats += 1;
     await this.tripsRepository.save(booking.trip);
 
-    return this.mapToResponseDto(await this.bookingsRepository.save(booking));
+    const saved = await this.bookingsRepository.save(booking);
+    this.notificationsService.notifyPassengerNoShow(booking.passenger.id, { bookingId: saved.id });
+    return this.mapToResponseDto(saved);
   }
 
   async getMyBookings(passengerId: string): Promise<BookingResponseDto[]> {
     const bookings = await this.bookingsRepository.find({
       where: { passenger: { id: passengerId } },
-      relations: ['trip', 'trip.driver', 'passenger'],
+      relations: ['trip', 'trip.driver', 'trip.driver.vehicle', 'passenger'],
       order: { createdAt: 'DESC' }
     });
 
@@ -205,6 +207,12 @@ export class BookingsService {
         driver: {
           id: booking.trip.driver?.id,
           name: booking.trip.driver?.name,
+          vehicle: booking.trip.driver?.vehicle ? {
+            brand: booking.trip.driver.vehicle.brand,
+            model: booking.trip.driver.vehicle.model,
+            color: booking.trip.driver.vehicle.color,
+            plate: booking.trip.driver.vehicle.plate,
+          } : null,
         }
       },
       passenger: {

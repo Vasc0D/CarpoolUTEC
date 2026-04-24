@@ -12,6 +12,7 @@ export class BookingResponseDto {
         driver: {
             id: string;
             name: string;
+            vehicle: { brand: string; model: string; color: string; plate: string } | null;
         };
     };
     passenger: {

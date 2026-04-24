@@ -1,8 +1,11 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
     View, Text, StyleSheet, FlatList, TouchableOpacity,
     ActivityIndicator, RefreshControl, Alert,
 } from 'react-native';
+import type { Socket } from 'socket.io-client';
+import { createSocket } from '../api/socketClient';
+import { useAuthStore } from '../store/authStore';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { axiosClient } from '../api/axiosClient';
@@ -15,10 +18,15 @@ interface MyBooking {
     id: string;
     status: BookingStatus;
     isBoarded?: boolean;
+    canceledByDriver?: boolean;
     trip: {
         id: string;
         departureTime: string;
-        driver: { id: string; name: string };
+        driver: {
+            id: string;
+            name: string;
+            vehicle: { brand: string; model: string; color: string; plate: string } | null;
+        };
     };
     createdAt: string;
 }
@@ -65,7 +73,9 @@ interface BookingCardProps {
 const BookingCard: React.FC<BookingCardProps> = ({ booking, canceling, boarding, onCancel, onBoard }) => {
     const cfg = STATUS_CONFIG[booking.status];
     const isAccepted = booking.status === 'ACCEPTED';
+    const isCanceledByDriver = booking.status === 'CANCELED' && booking.canceledByDriver;
     const canCancel = booking.status === 'PENDING' || (isAccepted && !booking.isBoarded);
+    const { vehicle } = booking.trip.driver;
 
     return (
         <View style={styles.card}>
@@ -78,6 +88,11 @@ const BookingCard: React.FC<BookingCardProps> = ({ booking, canceling, boarding,
                 </View>
                 <View style={{ flex: 1 }}>
                     <Text style={styles.driverName}>{booking.trip.driver.name}</Text>
+                    {vehicle && (
+                        <Text style={styles.vehicleText}>
+                            {vehicle.brand} · {vehicle.model} · {vehicle.color} · {vehicle.plate}
+                        </Text>
+                    )}
                     <Text style={styles.cardTime}>{formatDateTime(booking.trip.departureTime)}</Text>
                 </View>
                 {/* Status badge */}
@@ -86,6 +101,14 @@ const BookingCard: React.FC<BookingCardProps> = ({ booking, canceling, boarding,
                     <Text style={[styles.statusText, { color: cfg.color }]}>{cfg.label}</Text>
                 </View>
             </View>
+
+            {/* Canceled by driver banner */}
+            {isCanceledByDriver && (
+                <View style={styles.canceledByDriverRow}>
+                    <Ionicons name="warning-outline" size={15} color="#EF4444" />
+                    <Text style={styles.canceledByDriverText}>Viaje Cancelado por Conductor</Text>
+                </View>
+            )}
 
             {/* Boarding confirmation */}
             {isAccepted && (
@@ -139,6 +162,8 @@ const BookingCard: React.FC<BookingCardProps> = ({ booking, canceling, boarding,
 
 export const MyTripsScreen = () => {
     const insets = useSafeAreaInsets();
+    const { token } = useAuthStore();
+    const socketRef = useRef<Socket | null>(null);
     const [bookings, setBookings] = useState<MyBooking[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
@@ -162,6 +187,30 @@ export const MyTripsScreen = () => {
     }, []);
 
     useEffect(() => { fetchBookings(); }, [fetchBookings]);
+
+    // Real-time: trip canceled by driver or no-show by driver
+    useEffect(() => {
+        if (!token) return;
+        const socket = createSocket(token);
+        socketRef.current = socket;
+        socket.connect();
+
+        socket.on('trip_canceled', (data: { tripId: string }) => {
+            setBookings(prev => prev.map(b =>
+                b.trip.id === data.tripId && (b.status === 'PENDING' || b.status === 'ACCEPTED')
+                    ? { ...b, status: 'CANCELED' as const, canceledByDriver: true }
+                    : b
+            ));
+        });
+
+        socket.on('noShowUpdated', (data: { bookingId: string }) => {
+            setBookings(prev => prev.map(b =>
+                b.id === data.bookingId ? { ...b, status: 'CANCELED' as const } : b
+            ));
+        });
+
+        return () => { socket.disconnect(); socketRef.current = null; };
+    }, [token]);
 
     const handleBoard = async (bookingId: string) => {
         setBoardingId(bookingId);
@@ -273,6 +322,7 @@ const styles = StyleSheet.create({
     },
     driverAvatarText: { color: '#38BDF8', fontSize: 16, fontWeight: '800' },
     driverName: { fontSize: 15, fontWeight: '700', color: '#0F172A' },
+    vehicleText: { fontSize: 11, color: '#64748B', marginTop: 1 },
     cardTime: { fontSize: 12, color: '#64748B', marginTop: 2 },
 
     statusBadge: {
@@ -280,6 +330,12 @@ const styles = StyleSheet.create({
         paddingHorizontal: 8, paddingVertical: 4, borderRadius: 20,
     },
     statusText: { fontSize: 11, fontWeight: '700' },
+
+    canceledByDriverRow: {
+        flexDirection: 'row', alignItems: 'center', gap: 6,
+        backgroundColor: '#FFF5F5', borderRadius: 10, paddingVertical: 8, paddingHorizontal: 10,
+    },
+    canceledByDriverText: { fontSize: 13, fontWeight: '700', color: '#EF4444' },
 
     boardBtn: {
         flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,

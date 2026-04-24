@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Between, In, Repository } from 'typeorm';
+import { Between, In, LessThan, Repository } from 'typeorm';
+import { Cron } from '@nestjs/schedule';
 import { Trip, TripStatus } from './entities/trip.entity';
 import { CreateTripDto } from './dto/create-trip.dto';
 import { UsersService } from '../users/users.service';
@@ -147,6 +148,22 @@ export class TripsService {
       relations: ['bookings', 'bookings.passenger'],
       order: { departureTime: 'DESC' },
     });
+  }
+
+  @Cron('* * * * *')
+  async autoCancelEmptyTrips(): Promise<void> {
+    const overdueTrips = await this.tripsRepository.find({
+      where: { status: TripStatus.SCHEDULED, departureTime: LessThan(new Date()) },
+      relations: ['bookings'],
+    });
+
+    for (const trip of overdueTrips) {
+      const hasAccepted = trip.bookings.some(b => b.status === BookingStatus.ACCEPTED);
+      if (!hasAccepted) {
+        trip.status = TripStatus.CANCELED;
+        await this.tripsRepository.save(trip);
+      }
+    }
   }
 
   async cancelTrip(tripId: string, driverId: string): Promise<Trip> {

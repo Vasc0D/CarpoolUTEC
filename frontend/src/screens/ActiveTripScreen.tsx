@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-    View, Text, StyleSheet, Modal, TouchableOpacity, ActivityIndicator, Alert,
+    View, Text, StyleSheet, Modal, TouchableOpacity, ActivityIndicator, Alert, Linking,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
@@ -91,6 +91,31 @@ export const ActiveTripScreen = () => {
         latitude: c[1], longitude: c[0],
     })) ?? [];
 
+    const handleOpenNavigation = async () => {
+        const coords = trip?.routePolyline?.coordinates;
+        if (!coords?.length) return;
+        const last = coords[coords.length - 1];
+        const lat = last[1];
+        const lng = last[0];
+
+        const wazeUrl = `waze://?ll=${lat},${lng}&navigate=yes`;
+        const googleUrl = `comgooglemaps://?daddr=${lat},${lng}&directionsmode=driving`;
+        const googleFallback = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
+
+        const [wazeOk, googleOk] = await Promise.all([
+            Linking.canOpenURL(wazeUrl),
+            Linking.canOpenURL(googleUrl),
+        ]);
+
+        const options: { text: string; onPress: () => void }[] = [];
+        if (googleOk) options.push({ text: 'Google Maps', onPress: () => Linking.openURL(googleUrl) });
+        else options.push({ text: 'Google Maps (web)', onPress: () => Linking.openURL(googleFallback) });
+        if (wazeOk) options.push({ text: 'Waze', onPress: () => Linking.openURL(wazeUrl) });
+        options.push({ text: 'Cancelar', onPress: () => {} });
+
+        Alert.alert('¿Qué mapa deseas usar?', undefined, options.map(o => ({ text: o.text, onPress: o.onPress })));
+    };
+
     return (
         <View style={styles.container}>
             {/* Full-screen map */}
@@ -163,6 +188,11 @@ export const ActiveTripScreen = () => {
                             <Text style={styles.waitingText}>Esperando ubicación del conductor...</Text>
                         </View>
                     )}
+
+                    <TouchableOpacity style={styles.navBtn} onPress={handleOpenNavigation} activeOpacity={0.8}>
+                        <Ionicons name="navigate-outline" size={16} color="#FFF" />
+                        <Text style={styles.navBtnText}>Navegar al destino</Text>
+                    </TouchableOpacity>
                 </View>
             )}
 
@@ -248,6 +278,12 @@ const styles = StyleSheet.create({
 
     waitingRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     waitingText: { fontSize: 12, color: '#94A3B8' },
+
+    navBtn: {
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+        backgroundColor: '#0EA5E9', borderRadius: 14, paddingVertical: 12,
+    },
+    navBtnText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
 
     // Finished modal
     modalBackdrop: {

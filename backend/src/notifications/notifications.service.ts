@@ -28,4 +28,8 @@ export class NotificationsService {
   notifyDriverPassengerBoarded(driverId: string, data: any) {
     this.notificationsGateway.server.to(driverId).emit('passengerBoarded', data);
   }
+
+  notifyPassengerNoShow(passengerId: string, data: any) {
+    this.notificationsGateway.server.to(passengerId).emit('noShowUpdated', data);
+  }
 }

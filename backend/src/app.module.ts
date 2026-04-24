@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ScheduleModule } from '@nestjs/schedule';
 
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -17,6 +18,7 @@ import { AuthModule } from './auth/auth.module';
     ConfigModule.forRoot({
       isGlobal: true, // Permite usar ConfigService en cualquier módulo sin importarlo de nuevo
     }),
+    ScheduleModule.forRoot(),
     
     // 2. Configura la conexión a PostgreSQL
     TypeOrmModule.forRoot({
