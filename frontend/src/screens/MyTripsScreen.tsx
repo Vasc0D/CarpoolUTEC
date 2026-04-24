@@ -14,6 +14,7 @@ type BookingStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'CANCELED' | 'ACTIVE'
 interface MyBooking {
     id: string;
     status: BookingStatus;
+    isBoarded?: boolean;
     trip: {
         id: string;
         departureTime: string;
@@ -56,12 +57,15 @@ const formatDateTime = (iso: string) => {
 interface BookingCardProps {
     booking: MyBooking;
     canceling: boolean;
+    boarding: boolean;
     onCancel: (id: string) => void;
+    onBoard: (id: string) => void;
 }
 
-const BookingCard: React.FC<BookingCardProps> = ({ booking, canceling, onCancel }) => {
+const BookingCard: React.FC<BookingCardProps> = ({ booking, canceling, boarding, onCancel, onBoard }) => {
     const cfg = STATUS_CONFIG[booking.status];
-    const canCancel = booking.status === 'PENDING' || booking.status === 'ACCEPTED';
+    const isAccepted = booking.status === 'ACCEPTED';
+    const canCancel = booking.status === 'PENDING' || (isAccepted && !booking.isBoarded);
 
     return (
         <View style={styles.card}>
@@ -82,6 +86,32 @@ const BookingCard: React.FC<BookingCardProps> = ({ booking, canceling, onCancel 
                     <Text style={[styles.statusText, { color: cfg.color }]}>{cfg.label}</Text>
                 </View>
             </View>
+
+            {/* Boarding confirmation */}
+            {isAccepted && (
+                booking.isBoarded ? (
+                    <View style={styles.boardedRow}>
+                        <Ionicons name="checkmark-circle" size={16} color="#10B981" />
+                        <Text style={styles.boardedText}>Ya estás a bordo</Text>
+                    </View>
+                ) : (
+                    <TouchableOpacity
+                        style={styles.boardBtn}
+                        onPress={() => onBoard(booking.id)}
+                        disabled={boarding}
+                        activeOpacity={0.75}
+                    >
+                        {boarding ? (
+                            <ActivityIndicator size="small" color="#FFF" />
+                        ) : (
+                            <>
+                                <Ionicons name="car-outline" size={16} color="#FFF" />
+                                <Text style={styles.boardBtnText}>Confirmar subida al auto</Text>
+                            </>
+                        )}
+                    </TouchableOpacity>
+                )
+            )}
 
             {/* Cancel button */}
             {canCancel && (
@@ -113,6 +143,7 @@ export const MyTripsScreen = () => {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [cancelingId, setCancelingId] = useState<string | null>(null);
+    const [boardingId, setBoardingId] = useState<string | null>(null);
 
     const fetchBookings = useCallback(async (silent = false) => {
         if (!silent) setLoading(true);
@@ -131,6 +162,21 @@ export const MyTripsScreen = () => {
     }, []);
 
     useEffect(() => { fetchBookings(); }, [fetchBookings]);
+
+    const handleBoard = async (bookingId: string) => {
+        setBoardingId(bookingId);
+        try {
+            await axiosClient.patch(`/bookings/${bookingId}/board`);
+            setBookings(prev =>
+                prev.map(b => b.id === bookingId ? { ...b, isBoarded: true } : b)
+            );
+        } catch (error: any) {
+            const msg = error.response?.data?.message || 'No se pudo confirmar la subida.';
+            Alert.alert('Error', Array.isArray(msg) ? msg.join('\n') : msg);
+        } finally {
+            setBoardingId(null);
+        }
+    };
 
     const handleCancel = (bookingId: string) => {
         Alert.alert(
@@ -190,7 +236,9 @@ export const MyTripsScreen = () => {
                 <BookingCard
                     booking={item}
                     canceling={cancelingId === item.id}
+                    boarding={boardingId === item.id}
                     onCancel={handleCancel}
+                    onBoard={handleBoard}
                 />
             )}
             ListEmptyComponent={
@@ -232,6 +280,17 @@ const styles = StyleSheet.create({
         paddingHorizontal: 8, paddingVertical: 4, borderRadius: 20,
     },
     statusText: { fontSize: 11, fontWeight: '700' },
+
+    boardBtn: {
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+        borderRadius: 12, paddingVertical: 10, backgroundColor: '#10B981',
+    },
+    boardBtnText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
+    boardedRow: {
+        flexDirection: 'row', alignItems: 'center', gap: 6,
+        paddingVertical: 8, justifyContent: 'center',
+    },
+    boardedText: { fontSize: 14, fontWeight: '700', color: '#10B981' },
 
     cancelBtn: {
         flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,

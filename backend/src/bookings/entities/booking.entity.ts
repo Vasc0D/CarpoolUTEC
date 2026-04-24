@@ -28,6 +28,9 @@ export class Booking {
     })
     status: BookingStatus;
 
+    @Column({ default: false })
+    isBoarded: boolean;
+
     @Column({
         type: 'geometry',
         spatialFeatureType: 'Point',

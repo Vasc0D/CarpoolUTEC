@@ -144,6 +144,22 @@ export class BookingsService {
     return this.mapToResponseDto(await this.bookingsRepository.save(booking));
   }
 
+  async confirmBoarding(bookingId: string, passengerId: string): Promise<BookingResponseDto> {
+    const booking = await this.bookingsRepository.findOne({
+      where: { id: bookingId },
+      relations: ['trip', 'trip.driver', 'passenger'],
+    });
+
+    if (!booking) throw new NotFoundException('Reserva no encontrada');
+    if (booking.passenger.id !== passengerId)
+      throw new ForbiddenException('Esta reserva no te pertenece');
+    if (booking.status !== BookingStatus.ACCEPTED)
+      throw new BadRequestException('Solo puedes confirmar subida en una reserva aceptada');
+
+    booking.isBoarded = true;
+    return this.mapToResponseDto(await this.bookingsRepository.save(booking));
+  }
+
   async markNoShow(bookingId: string, driverId: string): Promise<BookingResponseDto> {
     const booking = await this.bookingsRepository.findOne({
       where: { id: bookingId },
@@ -177,6 +193,7 @@ export class BookingsService {
     return {
       id: booking.id,
       status: booking.status,
+      isBoarded: booking.isBoarded,
       trip: {
         id: booking.trip.id,
         origin: booking.trip.routePolyline?.coordinates?.[0] || null,

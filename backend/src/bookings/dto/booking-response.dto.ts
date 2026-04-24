@@ -3,6 +3,7 @@ import { BookingStatus } from '../entities/booking.entity';
 export class BookingResponseDto {
     id: string;
     status: BookingStatus;
+    isBoarded: boolean;
     trip: {
         id: string;
         origin: any;
