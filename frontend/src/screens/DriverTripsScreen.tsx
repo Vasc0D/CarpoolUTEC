@@ -16,6 +16,7 @@ import { useAuthStore } from '../store/authStore';
 interface BookingItem {
     id: string;
     status: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'CANCELED' | 'COMPLETED';
+    isBoarded?: boolean;
     passenger: { id: string; name: string };
     createdAt: string;
 }
@@ -119,7 +120,8 @@ const TripCard: React.FC<TripCardProps> = ({
     const minutesLate = (now.getTime() - new Date(trip.departureTime).getTime()) / 60000;
     const atDeparture = minutesLate >= 0;
     const pastGrace = minutesLate >= 5;
-    const canStart = trip.status === 'SCHEDULED' && atDeparture && (accepted.length === 0 || pastGrace);
+    const missingPassengers = accepted.some(b => !b.isBoarded);
+    const canStart = trip.status === 'SCHEDULED' && atDeparture && (!missingPassengers || pastGrace);
 
     const isCanceling = cancelingTripId === trip.id;
     const isStarting = startingTripId === trip.id;
@@ -178,7 +180,7 @@ const TripCard: React.FC<TripCardProps> = ({
                 <View style={styles.acceptedSection}>
                     <Text style={styles.acceptedTitle}>
                         Pasajeros confirmados ({accepted.length})
-                        {!pastGrace && atDeparture && (
+                        {!pastGrace && atDeparture && missingPassengers && (
                             <Text style={styles.graceHint}>
                                 {' '}· ausente disponible en {Math.ceil(5 - minutesLate)} min
                             </Text>
@@ -192,7 +194,9 @@ const TripCard: React.FC<TripCardProps> = ({
                                 </Text>
                             </View>
                             <Text style={styles.passengerName} numberOfLines={1}>{b.passenger.name}</Text>
-                            {pastGrace && (
+                            {b.isBoarded ? (
+                                <Ionicons name="checkmark-circle" size={24} color="#10B981" />
+                            ) : pastGrace ? (
                                 <TouchableOpacity
                                     style={[styles.actionBtn, styles.rejectBtn]}
                                     onPress={() => onNoShow(b.id, trip.id)}
@@ -202,7 +206,7 @@ const TripCard: React.FC<TripCardProps> = ({
                                         ? <ActivityIndicator size="small" color="#EF4444" />
                                         : <Ionicons name="close" size={18} color="#EF4444" />}
                                 </TouchableOpacity>
-                            )}
+                            ) : null}
                         </View>
                     ))}
                 </View>
@@ -366,6 +370,24 @@ export const DriverTripsScreen = () => {
             socketRef.current = null;
         };
     }, [activeTrip?.id, token]);
+
+    // ── Receive passengerBoarded notifications ───────────────────────────────
+    useEffect(() => {
+        if (!token) return;
+        const socket = createSocket(token);
+        socket.connect();
+
+        socket.on('passengerBoarded', (data: { bookingId: string }) => {
+            setTrips(prev => prev.map(t => ({
+                ...t,
+                bookings: t.bookings.map(b =>
+                    b.id === data.bookingId ? { ...b, isBoarded: true } : b
+                ),
+            })));
+        });
+
+        return () => { socket.disconnect(); };
+    }, [token]);
 
     // ── Handlers ─────────────────────────────────────────────────────────────
 

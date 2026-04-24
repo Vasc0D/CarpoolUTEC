@@ -1,10 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity,
     ActivityIndicator, Alert, ScrollView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '../store/authStore';
 import { axiosClient } from '../api/axiosClient';
@@ -37,12 +37,15 @@ export const ProfileScreen = () => {
     const [profile, setProfile] = useState<UserProfile | null>(null);
     const [loading, setLoading] = useState(true);
 
-    useEffect(() => {
-        axiosClient.get<UserProfile>('/users/me')
-            .then(res => setProfile(res.data))
-            .catch(() => Alert.alert('Error', 'No se pudieron cargar los datos del perfil.'))
-            .finally(() => setLoading(false));
-    }, []);
+    useFocusEffect(
+        useCallback(() => {
+            setLoading(true);
+            axiosClient.get<UserProfile>('/users/me')
+                .then(res => setProfile(res.data))
+                .catch(() => Alert.alert('Error', 'No se pudieron cargar los datos del perfil.'))
+                .finally(() => setLoading(false));
+        }, [])
+    );
 
     const handleLogout = () => {
         Alert.alert('Cerrar sesión', '¿Estás seguro que quieres salir?', [

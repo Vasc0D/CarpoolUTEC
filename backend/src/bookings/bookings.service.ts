@@ -1,8 +1,8 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException, GoneException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { Booking, BookingStatus } from './entities/booking.entity';
-import { Trip } from '../trips/entities/trip.entity';
+import { Trip, TripStatus } from '../trips/entities/trip.entity';
 import { UsersService } from '../users/users.service';
 import { BookingResponseDto } from './dto/booking-response.dto';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -25,6 +25,7 @@ export class BookingsService {
     });
 
     if (!trip) throw new NotFoundException('El viaje no existe');
+    if (trip.status !== TripStatus.SCHEDULED) throw new GoneException('Este viaje ya no está disponible');
     if (trip.availableSeats === 0) throw new BadRequestException('El viaje ya está lleno');
     if (trip.driver.id === passengerId) throw new BadRequestException('No puedes reservar tu propio viaje');
 
@@ -157,7 +158,9 @@ export class BookingsService {
       throw new BadRequestException('Solo puedes confirmar subida en una reserva aceptada');
 
     booking.isBoarded = true;
-    return this.mapToResponseDto(await this.bookingsRepository.save(booking));
+    const saved = await this.bookingsRepository.save(booking);
+    this.notificationsService.notifyDriverPassengerBoarded(booking.trip.driver.id, { bookingId: saved.id });
+    return this.mapToResponseDto(saved);
   }
 
   async markNoShow(bookingId: string, driverId: string): Promise<BookingResponseDto> {

@@ -340,7 +340,7 @@ export const HomeScreen = () => {
         socket.on('trip_canceled', (data: { tripId: string }) => {
             Alert.alert('Viaje cancelado', 'El conductor canceló el viaje. Puedes buscar otra opción.');
             setMyActiveBooking(prev => (prev?.tripId === data.tripId ? null : prev));
-            fetchTrips();
+            setTrips(prev => prev.filter(t => t.id !== data.tripId));
         });
 
         socket.on('trip_started', (data: { tripId: string }) => {

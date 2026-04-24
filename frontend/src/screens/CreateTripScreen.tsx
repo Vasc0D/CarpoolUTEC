@@ -34,6 +34,12 @@ export const CreateTripScreen = () => {
             return;
         }
 
+        const minDeparture = new Date(Date.now() + 0 * 60 * 1000);
+        if (departureTime < minDeparture) {
+            Alert.alert('Hora inválida', 'La hora de salida debe ser al menos 20 minutos a partir de ahora.');
+            return;
+        }
+
         setLoading(true);
         try {
             await axiosClient.post('/trips', {

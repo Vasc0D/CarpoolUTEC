@@ -92,12 +92,12 @@ export class TripsService {
     if (trip.driver.id !== driverId) throw new ForbiddenException('Solo el conductor puede iniciar el viaje');
     if (trip.status !== TripStatus.SCHEDULED) throw new BadRequestException('El viaje no está en estado SCHEDULED');
 
-    const minutesLate = (Date.now() - new Date(trip.departureTime).getTime()) / 60000;
+    const minutesLate = (new Date().getTime() - new Date(trip.departureTime).getTime()) / 60000;
     if (minutesLate < 0) throw new BadRequestException('Aún no es la hora de salida');
 
-    const hasUnboardedPassengers = trip.bookings.some(b => b.status === BookingStatus.ACCEPTED);
-    if (hasUnboardedPassengers && minutesLate < 5) {
-      throw new BadRequestException('Debes esperar 5 minutos después de la hora de salida para iniciar sin todos los pasajeros.');
+    const missingPassengers = trip.bookings.some(b => b.status === BookingStatus.ACCEPTED && !b.isBoarded);
+    if (missingPassengers && minutesLate < 5) {
+      throw new BadRequestException('Debes esperar 5 minutos o a que todos suban.');
     }
 
     trip.status = TripStatus.ACTIVE;

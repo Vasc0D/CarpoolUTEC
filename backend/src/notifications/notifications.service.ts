@@ -24,4 +24,8 @@ export class NotificationsService {
   notifyPassengerTripFinished(passengerId: string, data: any) {
     this.notificationsGateway.server.to(passengerId).emit('trip_finished', data);
   }
+
+  notifyDriverPassengerBoarded(driverId: string, data: any) {
+    this.notificationsGateway.server.to(driverId).emit('passengerBoarded', data);
+  }
 }
