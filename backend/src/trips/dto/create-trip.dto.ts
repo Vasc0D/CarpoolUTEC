@@ -1,4 +1,4 @@
-import { IsBoolean, IsDateString, IsNotEmpty, IsArray, ArrayMinSize, IsOptional, IsString } from 'class-validator';
+import { IsBoolean, IsDateString, IsNotEmpty, IsArray, ArrayMinSize, IsOptional, IsString, IsNumber, Min } from 'class-validator';
 
 export class CreateTripDto {
     @IsArray()
@@ -18,6 +18,11 @@ export class CreateTripDto {
 
     @IsOptional()
     maxDetourMinutes?: number;
+
+    @IsNumber()
+    @Min(0)
+    @IsOptional()
+    pricePerSeat?: number;
 
     @IsString()
     @IsNotEmpty()

@@ -54,6 +54,7 @@ export class TripsService {
       autoAccept: createTripDto.autoAccept || false,
       availableSeats: createTripDto.availableSeats ?? user.vehicle.capacity,
       maxDetourMinutes: createTripDto.maxDetourMinutes ?? 5,
+      pricePerSeat: createTripDto.pricePerSeat ?? 0,
       meetingPoint: createTripDto.meetingPoint,
       status: TripStatus.SCHEDULED,
     });
@@ -62,16 +63,54 @@ export class TripsService {
     return this.tripsRepository.save(trip);
   }
 
-  async findAvailableTrips(lat: number, lng: number): Promise<any[]> {
-    return this.tripsRepository.createQueryBuilder('trip')
+  async findAvailableTrips(lat: number, lng: number, destLat?: number, destLng?: number): Promise<any[]> {
+    const qb = this.tripsRepository.createQueryBuilder('trip')
       .leftJoin('trip.driver', 'driver')
       .leftJoin('driver.vehicle', 'vehicle')
       .addSelect(['driver.id', 'driver.name', 'vehicle.model', 'vehicle.color', 'vehicle.brand', 'vehicle.plate'])
       .where('trip.status = :status', { status: TripStatus.SCHEDULED })
       .andWhere('trip.availableSeats > 0')
       .andWhere('trip.departureTime > :now', { now: new Date() })
-      .andWhere(this.geoService.getDWithinCondition('trip."routePolyline"', lat, lng, 500))
-      .getMany();
+      .andWhere(this.geoService.getDWithinCondition('trip."routePolyline"', lat, lng, 500));
+
+    if (destLat !== undefined && destLng !== undefined) {
+      qb.addSelect(
+        `ST_Distance(trip."routePolyline"::geography, ST_SetSRID(ST_MakePoint(${destLng}, ${destLat}), 4326)::geography)`,
+        'distanceToDestination',
+      ).andWhere(this.geoService.getDWithinCondition('trip."routePolyline"', destLat, destLng, 800));
+
+      const { entities, raw } = await qb.getRawAndEntities();
+
+      const result = entities.map((entity, i) => {
+        const dist = parseFloat(raw[i].distanceToDestination ?? '9999');
+        return {
+          ...entity,
+          distanceToDestination: Math.round(dist),
+          matchType: dist <= 200 ? 'exact' : 'near',
+        };
+      });
+
+      result.sort((a, b) => {
+        if (a.matchType !== b.matchType) return a.matchType === 'exact' ? -1 : 1;
+        return a.distanceToDestination - b.distanceToDestination;
+      });
+
+      return result;
+    }
+
+    return qb.getMany();
+  }
+
+  async getStopsCoverage(stops: Array<{ id: string; lat: number; lng: number }>): Promise<Array<{ id: string; covered: boolean }>> {
+    return Promise.all(stops.map(async stop => {
+      const count = await this.tripsRepository.createQueryBuilder('trip')
+        .where('trip.status = :status', { status: TripStatus.SCHEDULED })
+        .andWhere('trip.availableSeats > 0')
+        .andWhere('trip.departureTime > :now', { now: new Date() })
+        .andWhere(this.geoService.getDWithinCondition('trip."routePolyline"', stop.lat, stop.lng, 600))
+        .getCount();
+      return { id: stop.id, covered: count > 0 };
+    }));
   }
 
   async findOne(tripId: string): Promise<Trip> {

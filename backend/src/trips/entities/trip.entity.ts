@@ -43,6 +43,9 @@ export class Trip {
   })
   status: TripStatus;
 
+  @Column({ type: 'decimal', precision: 6, scale: 2, default: 0 })
+  pricePerSeat: number;
+
   @Column({ type: 'text', nullable: true })
   meetingPoint: string;
 

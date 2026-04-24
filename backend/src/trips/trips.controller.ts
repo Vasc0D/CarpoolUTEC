@@ -14,9 +14,30 @@ export class TripsController {
   }
 
   @Get()
-  findAll(@Query('lat') lat: string, @Query('lng') lng: string) {
+  findAll(
+    @Query('lat') lat: string,
+    @Query('lng') lng: string,
+    @Query('destLat') destLat?: string,
+    @Query('destLng') destLng?: string,
+  ) {
     if (!lat || !lng) throw new BadRequestException('Se requieren las coordenadas lat y lng');
-    return this.tripsService.findAvailableTrips(parseFloat(lat), parseFloat(lng));
+    return this.tripsService.findAvailableTrips(
+      parseFloat(lat),
+      parseFloat(lng),
+      destLat ? parseFloat(destLat) : undefined,
+      destLng ? parseFloat(destLng) : undefined,
+    );
+  }
+
+  @Get('stops-coverage')
+  getStopsCoverage(@Query('stops') stopsJson: string) {
+    if (!stopsJson) throw new BadRequestException('Se requiere el parámetro stops');
+    try {
+      const stops = JSON.parse(stopsJson);
+      return this.tripsService.getStopsCoverage(stops);
+    } catch {
+      throw new BadRequestException('stops debe ser un JSON válido');
+    }
   }
 
   @Get('my-trips')
