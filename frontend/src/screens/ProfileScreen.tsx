@@ -32,7 +32,7 @@ interface UserProfile {
 export const ProfileScreen = () => {
     const navigation = useNavigation<any>();
     const insets = useSafeAreaInsets();
-    const { user, logout } = useAuthStore();
+    const { user, logout, isDriver } = useAuthStore();
 
     const [profile, setProfile] = useState<UserProfile | null>(null);
     const [loading, setLoading] = useState(true);
@@ -143,6 +143,27 @@ export const ProfileScreen = () => {
                 )}
             </View>
 
+            {/* ── Historial de viajes (solo conductores) ─────────────── */}
+            {isDriver && (
+                <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>Conductor</Text>
+                    <TouchableOpacity
+                        style={styles.historyCard}
+                        onPress={() => navigation.navigate('DriverTrips')}
+                        activeOpacity={0.75}
+                    >
+                        <View style={styles.historyIconWrap}>
+                            <Ionicons name="time-outline" size={20} color="#10B981" />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                            <Text style={styles.historyTitle}>Historial de viajes</Text>
+                            <Text style={styles.historySubtitle}>Ver viajes completados y cancelados</Text>
+                        </View>
+                        <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
+                    </TouchableOpacity>
+                </View>
+            )}
+
             {/* ── Cerrar sesión ─────────────────────────────────────────── */}
             <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout} activeOpacity={0.8}>
                 <Ionicons name="log-out-outline" size={20} color="#EF4444" />
@@ -211,6 +232,20 @@ const styles = StyleSheet.create({
     },
     addVehicleTitle: { fontSize: 15, fontWeight: '700', color: '#0F172A' },
     addVehicleSubtitle: { fontSize: 13, color: '#94A3B8', marginTop: 2 },
+
+    // History card
+    historyCard: {
+        flexDirection: 'row', alignItems: 'center', gap: 14,
+        backgroundColor: '#FFF', borderRadius: 20, padding: 16,
+        shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.06, shadowRadius: 8, elevation: 3,
+    },
+    historyIconWrap: {
+        width: 40, height: 40, borderRadius: 12,
+        backgroundColor: '#F0FDF4', justifyContent: 'center', alignItems: 'center',
+    },
+    historyTitle: { fontSize: 15, fontWeight: '700', color: '#0F172A' },
+    historySubtitle: { fontSize: 13, color: '#94A3B8', marginTop: 2 },
 
     // Logout
     logoutBtn: {
