@@ -304,6 +304,7 @@ export const HomeScreen = () => {
 
     const [previewTrip, setPreviewTrip] = useState<TripMarker | null>(null);
     const [dropoffPoint, setDropoffPoint] = useState<{ latitude: number; longitude: number } | null>(null);
+    const [routeToDropoff, setRouteToDropoff] = useState<{ latitude: number; longitude: number }[]>([]);
 
     // ── Location ─────────────────────────────────────────────────────────────
     useEffect(() => {
@@ -365,24 +366,24 @@ export const HomeScreen = () => {
 
     const handlePreviewRoute = async (trip: TripMarker) => {
         setDropoffPoint(null);
+        setRouteToDropoff([]);
         setPreviewTrip(trip);
-        if (trip.routePolyline?.coordinates?.length) {
-            const coords = trip.routePolyline.coordinates.map((c: number[]) => ({
-                latitude: c[1], longitude: c[0],
-            }));
-            mapRef.current?.fitToCoordinates(coords, {
-                edgePadding: { top: 80, right: 40, bottom: 300, left: 40 },
-                animated: true,
-            });
-        }
         if (destLat !== null && destLng !== null) {
             try {
                 const { data } = await axiosClient.get(`/trips/${trip.id}/closest-point`, {
                     params: { destLat, destLng },
                 });
-                setDropoffPoint(data);
+                setDropoffPoint({ latitude: data.latitude, longitude: data.longitude });
+                const route: { latitude: number; longitude: number }[] = data.routeToDropoff ?? [];
+                setRouteToDropoff(route);
+                if (route.length) {
+                    mapRef.current?.fitToCoordinates(route, {
+                        edgePadding: { top: 80, right: 40, bottom: 300, left: 40 },
+                        animated: true,
+                    });
+                }
             } catch {
-                // silent — no marker if endpoint fails
+                // silent — no polyline or marker if endpoint fails
             }
         }
     };
@@ -390,6 +391,7 @@ export const HomeScreen = () => {
     const handleClearPreview = () => {
         setPreviewTrip(null);
         setDropoffPoint(null);
+        setRouteToDropoff([]);
     };
 
     const handleClearDest = () => {
@@ -399,6 +401,7 @@ export const HomeScreen = () => {
         setSelectedTrip(null);
         setPreviewTrip(null);
         setDropoffPoint(null);
+        setRouteToDropoff([]);
         destInputRef.current?.clear();
     };
 
@@ -555,15 +558,11 @@ export const HomeScreen = () => {
                                 </Marker>
                             ))
                         }
-                        {previewTrip?.routePolyline?.coordinates && (
+                        {routeToDropoff.length > 0 && (
                             <Polyline
-                                key={`preview-${previewTrip.id}`}
-                                coordinates={previewTrip.routePolyline.coordinates.map((c: number[]) => ({
-                                    latitude: c[1], longitude: c[0],
-                                }))}
+                                coordinates={routeToDropoff}
                                 strokeColor="#0EA5E9"
                                 strokeWidth={5}
-                                lineDashPattern={[0]}
                             />
                         )}
                         {dropoffPoint && (
