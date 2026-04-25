@@ -282,7 +282,14 @@ export class TripsService {
     tripId: string,
     destLat: number,
     destLng: number,
-  ): Promise<{ latitude: number; longitude: number; routeToDropoff: { latitude: number; longitude: number }[] }> {
+  ): Promise<{ latitude: number; longitude: number; routeToDropoff: { latitude: number; longitude: number }[]; isDetour: boolean }> {
+    const trip = await this.tripsRepository.findOne({ where: { id: tripId } });
+    if (!trip) throw new NotFoundException('Viaje no encontrado');
+
+    if (trip.detourEnabled) {
+      return this.previewRouteWithDetour(trip, destLat, destLng);
+    }
+
     const result = await this.tripsRepository.query(
       `SELECT
           ST_AsGeoJSON(
@@ -316,6 +323,47 @@ export class TripsService {
         latitude: c[1],
         longitude: c[0],
       })),
+      isDetour: false,
+    };
+  }
+
+  private async previewRouteWithDetour(
+    trip: Trip,
+    destLat: number,
+    destLng: number,
+  ): Promise<{ latitude: number; longitude: number; routeToDropoff: { latitude: number; longitude: number }[]; isDetour: boolean }> {
+    const coords: number[][] = trip.routePolyline?.coordinates;
+    if (!coords?.length || coords.length < 2) throw new NotFoundException('No se pudo calcular la ruta');
+
+    const origin = { lat: coords[0][1], lng: coords[0][0] };
+    const finalDest = { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
+    const existingWaypoints = (trip.passengerWaypoints ?? []).map(w => ({ lat: w.lat, lng: w.lng }));
+    const allWaypoints = [origin, ...existingWaypoints, { lat: destLat, lng: destLng }, finalDest];
+
+    const { polylinePoints } = await this.directionsService.getRoute(allWaypoints);
+
+    // Encontrar el punto del polyline MÁS CERCANO al destino del pasajero
+    let closestIndex = 0;
+    let closestDist = Infinity;
+    polylinePoints.forEach(([lat, lng], i) => {
+      const dist = Math.sqrt(Math.pow(lat - destLat, 2) + Math.pow(lng - destLng, 2));
+      if (dist < closestDist) {
+        closestDist = dist;
+        closestIndex = i;
+      }
+    });
+
+    // Recortar hasta ese punto e incluir el destino exacto del pasajero al final
+    const trimmedPoints: [number, number][] = [
+      ...polylinePoints.slice(0, closestIndex + 1),
+      [destLat, destLng],
+    ];
+
+    return {
+      latitude: destLat,
+      longitude: destLng,
+      routeToDropoff: trimmedPoints.map(([lat, lng]) => ({ latitude: lat, longitude: lng })),
+      isDetour: true,
     };
   }
 
