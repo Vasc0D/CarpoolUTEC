@@ -1,10 +1,10 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity, Modal,
-    ActivityIndicator, Animated, Dimensions, ScrollView, Alert
+    ActivityIndicator, Animated, Dimensions, ScrollView, FlatList, Alert
 } from 'react-native';
 import * as Location from 'expo-location';
-import MapView, { Marker, PROVIDER_DEFAULT } from 'react-native-maps';
+import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -70,7 +70,7 @@ const POPULAR_STOPS = [
     { id: 'san_luis', name: 'San Luis', lat: -12.0750, lng: -76.9820 },
 ];
 
-// ─── Bottom Sheet Modal ───────────────────────────────────────────────────────
+// ─── Trip Sheet Modal ─────────────────────────────────────────────────────────
 
 interface TripSheetProps {
     trip: TripMarker | null;
@@ -80,7 +80,7 @@ interface TripSheetProps {
     booking: boolean;
     booked: boolean;
     canceling: boolean;
-    myBooking: ActiveBooking | null; // active booking on THIS trip, if any
+    myBooking: ActiveBooking | null;
 }
 
 const BOOKING_STATUS_CONFIG = {
@@ -135,7 +135,6 @@ const TripSheet: React.FC<TripSheetProps> = ({
                 <View style={styles.sheetHandle} />
 
                 {booked ? (
-                    // ── Solicitud enviada (just booked) ─────────────────────
                     <View style={styles.successContainer}>
                         <Animated.View style={[styles.successIcon, { transform: [{ scale: successScale }] }]}>
                             <Ionicons name="checkmark-circle" size={72} color="#10B981" />
@@ -150,7 +149,6 @@ const TripSheet: React.FC<TripSheetProps> = ({
                     </View>
                 ) : (
                     <ScrollView showsVerticalScrollIndicator={false}>
-                        {/* Driver header */}
                         <View style={styles.sheetHeader}>
                             <View style={styles.driverAvatar}>
                                 <Text style={styles.driverAvatarText}>
@@ -167,7 +165,6 @@ const TripSheet: React.FC<TripSheetProps> = ({
                             </View>
                         </View>
 
-                        {/* Price + matchType row */}
                         <View style={styles.priceMatchRow}>
                             <View style={styles.priceTag}>
                                 <Ionicons name="cash-outline" size={14} color="#0EA5E9" />
@@ -201,7 +198,6 @@ const TripSheet: React.FC<TripSheetProps> = ({
                             )}
                         </View>
 
-                        {/* Info cards */}
                         <View style={styles.infoRow}>
                             <View style={styles.infoCard}>
                                 <Ionicons name="people-outline" size={22} color="#0EA5E9" />
@@ -224,9 +220,7 @@ const TripSheet: React.FC<TripSheetProps> = ({
                             </View>
                         </View>
 
-                        {/* CTA — differs based on booking state */}
                         {statusCfg && myBooking ? (
-                            // Already has an active booking on this trip
                             <View style={[styles.bookingStatusCard, { borderColor: statusCfg.color + '40' }]}>
                                 <View style={styles.bookingStatusHeader}>
                                     <Ionicons name={statusCfg.icon} size={22} color={statusCfg.color} />
@@ -253,7 +247,6 @@ const TripSheet: React.FC<TripSheetProps> = ({
                                 </TouchableOpacity>
                             </View>
                         ) : (
-                            // Normal book button
                             <TouchableOpacity
                                 style={[
                                     styles.bookButton,
@@ -289,30 +282,30 @@ export const HomeScreen = () => {
     const navigation = useNavigation<any>();
     const { appMode, setAppMode, isDriver, token, user } = useAuthStore();
     const socketRef = useRef<Socket | null>(null);
+    const mapRef = useRef<MapView>(null);
 
     const [location, setLocation] = useState<Location.LocationObject | null>(null);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-    // Destination search state
     const [destLat, setDestLat] = useState<number | null>(null);
     const [destLng, setDestLng] = useState<number | null>(null);
     const destInputRef = useRef<any>(null);
 
-    // Stops coverage state
     const [coveredStops, setCoveredStops] = useState<string[]>([]);
 
-    // Passenger state
     const [trips, setTrips] = useState<TripMarker[]>([]);
     const [loadingTrips, setLoadingTrips] = useState(false);
     const [selectedTrip, setSelectedTrip] = useState<TripMarker | null>(null);
     const [bookingTripId, setBookingTripId] = useState<string | null>(null);
     const [bookedTripId, setBookedTripId] = useState<string | null>(null);
 
-    // Active booking of the current passenger (at most one PENDING/ACCEPTED)
     const [myActiveBooking, setMyActiveBooking] = useState<ActiveBooking | null>(null);
     const [cancelingBooking, setCancelingBooking] = useState(false);
 
-    // ── Location ────────────────────────────────────────────────────────────
+    const [previewTrip, setPreviewTrip] = useState<TripMarker | null>(null);
+    const [dropoffPoint, setDropoffPoint] = useState<{ latitude: number; longitude: number } | null>(null);
+
+    // ── Location ─────────────────────────────────────────────────────────────
     useEffect(() => {
         (async () => {
             const { status } = await Location.requestForegroundPermissionsAsync();
@@ -321,7 +314,7 @@ export const HomeScreen = () => {
         })();
     }, []);
 
-    // ── Fetch passenger's active booking ────────────────────────────────────
+    // ── Fetch active booking ──────────────────────────────────────────────────
     const fetchMyActiveBooking = useCallback(async () => {
         if (appMode !== 'passenger') return;
         try {
@@ -329,22 +322,22 @@ export const HomeScreen = () => {
             const active = (data as any[]).find(b => b.status === 'PENDING' || b.status === 'ACCEPTED');
             setMyActiveBooking(active ? { id: active.id, tripId: active.trip.id, status: active.status } : null);
         } catch {
-            // silent — don't break the map
+            // silent
         }
     }, [appMode]);
 
-    // ── Fetch available trips ────────────────────────────────────────────────
-    const fetchTrips = useCallback(async () => {
+    // ── Fetch trips — only runs when a destination is known ──────────────────
+    const fetchTrips = useCallback(async (overrideLat?: number, overrideLng?: number) => {
         if (!location || appMode !== 'passenger') return;
+        const eLat = overrideLat ?? destLat;
+        const eLng = overrideLng ?? destLng;
+        if (eLat === null || eLng === null) return;
         setLoadingTrips(true);
         try {
             const { latitude, longitude } = location.coords;
-            const params: Record<string, number> = { lat: latitude, lng: longitude };
-            if (destLat !== null && destLng !== null) {
-                params.destLat = destLat;
-                params.destLng = destLng;
-            }
-            const { data } = await axiosClient.get('/trips', { params });
+            const { data } = await axiosClient.get('/trips', {
+                params: { lat: latitude, lng: longitude, destLat: eLat, destLng: eLng },
+            });
             setTrips(data ?? []);
         } catch (error: any) {
             console.error('Error fetching trips:', error.response?.data || error.message);
@@ -366,13 +359,46 @@ export const HomeScreen = () => {
                     .map(s => s.id),
             );
         } catch {
-            // silent — no rompe la UI
+            // silent
         }
     }, [appMode]);
+
+    const handlePreviewRoute = async (trip: TripMarker) => {
+        setDropoffPoint(null);
+        setPreviewTrip(trip);
+        if (trip.routePolyline?.coordinates?.length) {
+            const coords = trip.routePolyline.coordinates.map((c: number[]) => ({
+                latitude: c[1], longitude: c[0],
+            }));
+            mapRef.current?.fitToCoordinates(coords, {
+                edgePadding: { top: 80, right: 40, bottom: 300, left: 40 },
+                animated: true,
+            });
+        }
+        if (destLat !== null && destLng !== null) {
+            try {
+                const { data } = await axiosClient.get(`/trips/${trip.id}/closest-point`, {
+                    params: { destLat, destLng },
+                });
+                setDropoffPoint(data);
+            } catch {
+                // silent — no marker if endpoint fails
+            }
+        }
+    };
+
+    const handleClearPreview = () => {
+        setPreviewTrip(null);
+        setDropoffPoint(null);
+    };
 
     const handleClearDest = () => {
         setDestLat(null);
         setDestLng(null);
+        setTrips([]);
+        setSelectedTrip(null);
+        setPreviewTrip(null);
+        setDropoffPoint(null);
         destInputRef.current?.clear();
     };
 
@@ -388,7 +414,7 @@ export const HomeScreen = () => {
         fetchStopsCoverage();
     }, [fetchTrips, fetchMyActiveBooking, fetchStopsCoverage]);
 
-    // ── Driver socket: new booking notifications ─────────────────────────────
+    // ── Driver socket ─────────────────────────────────────────────────────────
     useEffect(() => {
         if (appMode !== 'driver' || !token) return;
         const socket = createSocket(token);
@@ -407,7 +433,7 @@ export const HomeScreen = () => {
         return () => { socket.disconnect(); socketRef.current = null; };
     }, [appMode, token]);
 
-    // ── Passenger socket: booking status + trip canceled ────────────────────
+    // ── Passenger socket ──────────────────────────────────────────────────────
     useEffect(() => {
         if (appMode !== 'passenger' || !token) return;
         const socket = createSocket(token);
@@ -443,7 +469,7 @@ export const HomeScreen = () => {
         return () => { socket.disconnect(); socketRef.current = null; };
     }, [appMode, token]);
 
-    // ── Book seat ────────────────────────────────────────────────────────────
+    // ── Book seat ─────────────────────────────────────────────────────────────
     const handleBookSeat = async (tripId: string) => {
         setBookingTripId(tripId);
         try {
@@ -454,7 +480,6 @@ export const HomeScreen = () => {
             setSelectedTrip(prev =>
                 prev?.id === tripId ? { ...prev, availableSeats: Math.max(0, prev.availableSeats - 1) } : prev
             );
-            // Reflect the new booking in the active booking state
             setMyActiveBooking({ id: data.id, tripId, status: data.status === 'ACCEPTED' ? 'ACCEPTED' : 'PENDING' });
             setBookedTripId(tripId);
         } catch (error: any) {
@@ -465,13 +490,12 @@ export const HomeScreen = () => {
         }
     };
 
-    // ── Cancel booking (from sheet) ──────────────────────────────────────────
+    // ── Cancel booking ────────────────────────────────────────────────────────
     const handleCancelBooking = async (bookingId: string) => {
         setCancelingBooking(true);
         try {
             await axiosClient.patch(`/bookings/${bookingId}/cancel`);
             setMyActiveBooking(null);
-            // Restore seat count optimistically
             if (selectedTrip) {
                 setTrips(prev =>
                     prev.map(t => t.id === selectedTrip.id ? { ...t, availableSeats: t.availableSeats + 1 } : t)
@@ -491,7 +515,6 @@ export const HomeScreen = () => {
         setBookedTripId(null);
     };
 
-    // ── Mode toggle ──────────────────────────────────────────────────────────
     const toggleAppMode = (mode: 'driver' | 'passenger') => {
         setAppMode(mode);
         if (mode === 'passenger' && location) fetchTrips();
@@ -500,45 +523,67 @@ export const HomeScreen = () => {
     // ─── Render ───────────────────────────────────────────────────────────────
     return (
         <View style={styles.container}>
-            {/* Map */}
-            {location ? (
-                <MapView
-                    provider={PROVIDER_DEFAULT}
-                    style={StyleSheet.absoluteFillObject}
-                    initialRegion={{
-                        latitude: location.coords.latitude,
-                        longitude: location.coords.longitude,
-                        latitudeDelta: 0.01,
-                        longitudeDelta: 0.01,
-                    }}
-                    showsUserLocation
-                >
-                    {appMode === 'passenger' && POPULAR_STOPS
-                        .filter(s => coveredStops.includes(s.id))
-                        .map(stop => (
-                            <Marker
-                                key={`stop-${stop.id}`}
-                                coordinate={{ latitude: stop.lat, longitude: stop.lng }}
-                                onPress={() => handleStopTap(stop)}
-                            >
-                                <View style={styles.stopMarker}>
-                                    <Ionicons name="location" size={13} color="#FFF" />
-                                    <Text style={styles.stopMarkerText} numberOfLines={1}>
-                                        {stop.name.split(' ')[0]}
-                                    </Text>
+            {/* Map area — fixed height in passenger mode, fills screen in driver mode */}
+            <View style={appMode === 'passenger' ? styles.mapAreaPassenger : styles.mapAreaDriver}>
+                {location ? (
+                    <MapView
+                        ref={mapRef}
+                        provider={PROVIDER_DEFAULT}
+                        style={StyleSheet.absoluteFillObject}
+                        initialRegion={{
+                            latitude: location.coords.latitude,
+                            longitude: location.coords.longitude,
+                            latitudeDelta: 0.01,
+                            longitudeDelta: 0.01,
+                        }}
+                        showsUserLocation
+                    >
+                        {appMode === 'passenger' && POPULAR_STOPS
+                            .filter(s => coveredStops.includes(s.id))
+                            .map(stop => (
+                                <Marker
+                                    key={`stop-${stop.id}`}
+                                    coordinate={{ latitude: stop.lat, longitude: stop.lng }}
+                                    onPress={() => handleStopTap(stop)}
+                                >
+                                    <View style={styles.stopMarker}>
+                                        <Ionicons name="location" size={13} color="#FFF" />
+                                        <Text style={styles.stopMarkerText} numberOfLines={1}>
+                                            {stop.name.split(' ')[0]}
+                                        </Text>
+                                    </View>
+                                </Marker>
+                            ))
+                        }
+                        {previewTrip?.routePolyline?.coordinates && (
+                            <Polyline
+                                key={`preview-${previewTrip.id}`}
+                                coordinates={previewTrip.routePolyline.coordinates.map((c: number[]) => ({
+                                    latitude: c[1], longitude: c[0],
+                                }))}
+                                strokeColor="#0EA5E9"
+                                strokeWidth={5}
+                                lineDashPattern={[0]}
+                            />
+                        )}
+                        {dropoffPoint && (
+                            <Marker coordinate={dropoffPoint} anchor={{ x: 0.5, y: 0.5 }}>
+                                <View style={styles.dropoffMarker}>
+                                    <Ionicons name="location" size={14} color="#FFF" />
+                                    <Text style={styles.dropoffMarkerText}>Te bajan aquí</Text>
                                 </View>
                             </Marker>
-                        ))
-                    }
-                </MapView>
-            ) : (
-                <View style={styles.loadingContainer}>
-                    <ActivityIndicator size="large" color="#0EA5E9" />
-                    <Text style={styles.loadingText}>{errorMsg || 'Cargando mapa...'}</Text>
-                </View>
-            )}
+                        )}
+                    </MapView>
+                ) : (
+                    <View style={styles.loadingContainer}>
+                        <ActivityIndicator size="large" color="#0EA5E9" />
+                        <Text style={styles.loadingText}>{errorMsg || 'Cargando mapa...'}</Text>
+                    </View>
+                )}
+            </View>
 
-            {/* Mode Toggle + Avatar */}
+            {/* Mode Toggle + Avatar — absolute over map */}
             <View style={[styles.overlay, { top: insets.top + 16 }]}>
                 <View style={styles.card}>
                     <TouchableOpacity
@@ -567,18 +612,20 @@ export const HomeScreen = () => {
                 </TouchableOpacity>
             </View>
 
-            {/* Passenger: status pill + Mis Reservas */}
+            {/* Passenger: destination search — absolute over map */}
             {appMode === 'passenger' && (
                 <View style={[styles.passengerBar, { top: insets.top + 80 }]}>
-                    {/* Destination search */}
                     <View style={styles.destSearchContainer}>
                         <GooglePlacesAutocomplete
                             ref={destInputRef}
                             placeholder="¿A dónde vas?"
                             onPress={(_data, details = null) => {
                                 if (details) {
-                                    setDestLat(details.geometry.location.lat);
-                                    setDestLng(details.geometry.location.lng);
+                                    const lat = details.geometry.location.lat;
+                                    const lng = details.geometry.location.lng;
+                                    setDestLat(lat);
+                                    setDestLng(lng);
+                                    fetchTrips(lat, lng);
                                 }
                             }}
                             query={{ key: GOOGLE_MAPS_KEY, language: 'es' }}
@@ -598,37 +645,81 @@ export const HomeScreen = () => {
                             </TouchableOpacity>
                         )}
                     </View>
+                </View>
+            )}
 
-                    {/* Trip cards list */}
+            {/* Passenger: static bottom panel */}
+            {appMode === 'passenger' && (
+                <View style={styles.bottomPanel}>
+                    <View style={styles.panelHeader}>
+                        <View>
+                            <Text style={styles.panelTitle}>
+                                {destLat !== null ? 'Resultados para destino' : 'Viajes disponibles'}
+                            </Text>
+                            {!loadingTrips && destLat !== null && (
+                                <Text style={styles.panelSubtitle}>
+                                    {trips.length} viaje{trips.length !== 1 ? 's' : ''} encontrado{trips.length !== 1 ? 's' : ''}
+                                </Text>
+                            )}
+                        </View>
+                        <TouchableOpacity
+                            style={[styles.myBookingsBtn, myActiveBooking && styles.myBookingsBtnActive]}
+                            onPress={() => navigation.navigate('MyBookings')}
+                            activeOpacity={0.8}
+                        >
+                            <Ionicons
+                                name={myActiveBooking ? 'bookmark' : 'bookmark-outline'}
+                                size={13}
+                                color={myActiveBooking ? '#0EA5E9' : '#64748B'}
+                            />
+                            <Text style={[styles.myBookingsBtnText, myActiveBooking && styles.myBookingsBtnTextActive]}>
+                                {myActiveBooking
+                                    ? myActiveBooking.status === 'ACCEPTED' ? 'Reserva confirmada' : 'Reserva pendiente'
+                                    : 'Mis Reservas'}
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+
                     {loadingTrips ? (
-                        <View style={styles.pill}>
-                            <ActivityIndicator size="small" color="#0EA5E9" />
-                            <Text style={styles.pillText}>Buscando viajes...</Text>
+                        <View style={styles.loadingPanel}>
+                            <ActivityIndicator size="large" color="#0EA5E9" />
+                            <Text style={styles.loadingPanelText}>Buscando viajes...</Text>
                         </View>
                     ) : trips.length === 0 ? (
-                        <View style={styles.pill}>
-                            <Ionicons name="search-outline" size={14} color="#94A3B8" />
-                            <Text style={[styles.pillText, { color: '#94A3B8' }]}>No hay viajes cerca</Text>
-                            <TouchableOpacity onPress={fetchTrips} style={styles.refreshButton}>
-                                <Ionicons name="refresh-outline" size={14} color="#64748B" />
-                            </TouchableOpacity>
-                        </View>
+                        destLat === null ? (
+                            <View style={styles.emptyState}>
+                                <Ionicons name="search-outline" size={44} color="#CBD5E1" />
+                                <Text style={styles.inviteTitle}>¿A dónde vas hoy?</Text>
+                                <Text style={styles.inviteSubtitle}>
+                                    Escribe tu destino arriba para ver conductores disponibles
+                                </Text>
+                            </View>
+                        ) : (
+                            <View style={styles.emptyState}>
+                                <Ionicons name="car-outline" size={40} color="#CBD5E1" />
+                                <Text style={styles.emptyStateText}>No hay viajes disponibles</Text>
+                                <TouchableOpacity onPress={() => fetchTrips()} style={styles.retryBtn}>
+                                    <Ionicons name="refresh-outline" size={14} color="#64748B" />
+                                    <Text style={styles.retryBtnText}>Reintentar</Text>
+                                </TouchableOpacity>
+                            </View>
+                        )
                     ) : (
-                        <ScrollView
-                            horizontal
-                            showsHorizontalScrollIndicator={false}
-                            keyboardShouldPersistTaps="handled"
-                            contentContainerStyle={styles.tripCardsList}
-                        >
-                            {trips.map(trip => {
+                        <FlatList
+                            data={trips}
+                            keyExtractor={item => item.id}
+                            showsVerticalScrollIndicator={false}
+                            contentContainerStyle={styles.tripListContent}
+                            ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
+                            renderItem={({ item: trip }) => {
                                 const isMyBooked = myActiveBooking?.tripId === trip.id;
                                 const isBusy = bookingTripId === trip.id;
                                 return (
-                                    <View key={trip.id} style={[
-                                        styles.tripCard,
-                                        isMyBooked && styles.tripCardBooked,
-                                    ]}>
-                                        {/* Header */}
+                                    <TouchableOpacity
+                                        style={[styles.tripCard, isMyBooked && styles.tripCardBooked]}
+                                        onPress={() => { setBookedTripId(null); setSelectedTrip(trip); }}
+                                        activeOpacity={0.85}
+                                    >
                                         <View style={styles.tripCardHeader}>
                                             <View style={styles.tripCardAvatar}>
                                                 <Text style={styles.tripCardAvatarText}>
@@ -641,7 +732,7 @@ export const HomeScreen = () => {
                                                 </Text>
                                                 {trip.driver.vehicle && (
                                                     <Text style={styles.tripCardVehicle} numberOfLines={1}>
-                                                        {trip.driver.vehicle.brand} · {trip.driver.vehicle.color}
+                                                        {trip.driver.vehicle.brand} · {trip.driver.vehicle.model} · {trip.driver.vehicle.color}
                                                     </Text>
                                                 )}
                                             </View>
@@ -652,7 +743,7 @@ export const HomeScreen = () => {
                                                 ]}>
                                                     <Text style={[
                                                         styles.tripCardBadgeText,
-                                                        { color: trip.matchType === 'exact' ? '#16A34A' : '#CA8A04' },
+                                                        { color: trip.matchType === 'exact' ? '#10B981' : '#F59E0B' },
                                                     ]}>
                                                         {trip.matchType === 'exact' ? 'Te deja ahí' : 'Pasa cerca'}
                                                     </Text>
@@ -660,7 +751,6 @@ export const HomeScreen = () => {
                                             )}
                                         </View>
 
-                                        {/* Info row */}
                                         <View style={styles.tripCardInfo}>
                                             <View style={styles.tripCardInfoItem}>
                                                 <Ionicons name="time-outline" size={13} color="#64748B" />
@@ -682,18 +772,34 @@ export const HomeScreen = () => {
                                             </View>
                                         </View>
 
-                                        {/* Actions */}
                                         <View style={styles.tripCardActions}>
                                             <TouchableOpacity
-                                                style={styles.tripCardDetailBtn}
-                                                onPress={() => { setBookedTripId(null); setSelectedTrip(trip); }}
+                                                style={[
+                                                    styles.tripCardRouteBtn,
+                                                    previewTrip?.id === trip.id && styles.tripCardRouteBtnActive,
+                                                ]}
+                                                onPress={() => previewTrip?.id === trip.id
+                                                    ? handleClearPreview()
+                                                    : handlePreviewRoute(trip)
+                                                }
                                             >
-                                                <Text style={styles.tripCardDetailBtnText}>Detalles</Text>
+                                                <Ionicons
+                                                    name="map-outline"
+                                                    size={13}
+                                                    color={previewTrip?.id === trip.id ? '#FFF' : '#0EA5E9'}
+                                                />
+                                                <Text style={[
+                                                    styles.tripCardRouteBtnText,
+                                                    previewTrip?.id === trip.id && styles.tripCardRouteBtnTextActive,
+                                                ]}>
+                                                    Ver ruta
+                                                </Text>
                                             </TouchableOpacity>
                                             <TouchableOpacity
                                                 style={[
                                                     styles.tripCardBookBtn,
-                                                    (trip.availableSeats === 0 || !!myActiveBooking) && styles.tripCardBookBtnDisabled,
+                                                    (trip.availableSeats === 0 || (!!myActiveBooking && !isMyBooked)) && styles.tripCardBookBtnDisabled,
+                                                    isMyBooked && styles.tripCardBookBtnBooked,
                                                 ]}
                                                 onPress={() => handleBookSeat(trip.id)}
                                                 disabled={isBusy || trip.availableSeats === 0 || !!myActiveBooking}
@@ -706,29 +812,11 @@ export const HomeScreen = () => {
                                                 }
                                             </TouchableOpacity>
                                         </View>
-                                    </View>
+                                    </TouchableOpacity>
                                 );
-                            })}
-                        </ScrollView>
-                    )}
-
-                    {/* Mis Reservas shortcut */}
-                    <TouchableOpacity
-                        style={[styles.myBookingsBtn, myActiveBooking && styles.myBookingsBtnActive]}
-                        onPress={() => navigation.navigate('MyBookings')}
-                        activeOpacity={0.8}
-                    >
-                        <Ionicons
-                            name={myActiveBooking ? 'bookmark' : 'bookmark-outline'}
-                            size={13}
-                            color={myActiveBooking ? '#0EA5E9' : '#64748B'}
+                            }}
                         />
-                        <Text style={[styles.myBookingsBtnText, myActiveBooking && styles.myBookingsBtnTextActive]}>
-                            {myActiveBooking
-                                ? myActiveBooking.status === 'ACCEPTED' ? 'Reserva confirmada' : 'Reserva pendiente'
-                                : 'Mis Reservas'}
-                        </Text>
-                    </TouchableOpacity>
+                    )}
                 </View>
             )}
 
@@ -781,18 +869,21 @@ export const HomeScreen = () => {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#fff' },
-    loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
+    container: { flex: 1, backgroundColor: '#F8FAFC' },
+    loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12, backgroundColor: '#F8FAFC' },
     loadingText: { fontSize: 14, color: '#64748B' },
 
-    // Mode toggle
+    // Map areas
+    mapAreaPassenger: { height: height * 0.52 },
+    mapAreaDriver: { flex: 1 },
+
+    // Mode toggle overlay
     overlay: {
         position: 'absolute', width: '100%', paddingHorizontal: 20, zIndex: 10,
         flexDirection: 'row', alignItems: 'center', gap: 10,
     },
     card: {
-        flex: 1,
-        flexDirection: 'row', backgroundColor: '#fff', borderRadius: 30, padding: 4,
+        flex: 1, flexDirection: 'row', backgroundColor: '#fff', borderRadius: 30, padding: 4,
         shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.15, shadowRadius: 12, elevation: 8,
     },
@@ -809,24 +900,88 @@ const styles = StyleSheet.create({
     },
     avatarBtnText: { color: '#38BDF8', fontSize: 18, fontWeight: '900' },
 
-    // Passenger bar
-    passengerBar: { position: 'absolute', width: '100%', paddingHorizontal: 20, zIndex: 10, gap: 8 },
-    pill: {
-        flexDirection: 'row', alignItems: 'center', gap: 6,
-        alignSelf: 'center', backgroundColor: '#FFF',
-        paddingVertical: 8, paddingHorizontal: 14, borderRadius: 20,
+    // Destination search overlay
+    passengerBar: { position: 'absolute', width: '100%', paddingHorizontal: 20, zIndex: 10 },
+    destSearchContainer: { position: 'relative', zIndex: 20 },
+    destInput: {
+        height: 44, borderRadius: 22, backgroundColor: '#FFF', paddingHorizontal: 16,
+        fontSize: 14, color: '#0F172A',
         shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.1, shadowRadius: 6, elevation: 4,
     },
-    pillText: { fontSize: 13, fontWeight: '600', color: '#334155' },
-    refreshButton: { marginLeft: 4, padding: 2 },
+    destClearBtn: { position: 'absolute', right: 12, top: 12, zIndex: 21 },
+
+    // Bottom panel
+    bottomPanel: {
+        flex: 1, backgroundColor: '#FFF',
+        borderTopLeftRadius: 24, borderTopRightRadius: 24,
+        paddingTop: 16,
+        shadowColor: '#000', shadowOffset: { width: 0, height: -4 },
+        shadowOpacity: 0.08, shadowRadius: 12, elevation: 16,
+    },
+    panelHeader: {
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+        paddingHorizontal: 20, paddingBottom: 12,
+        borderBottomWidth: 1, borderBottomColor: '#F1F5F9',
+    },
+    panelTitle: { fontSize: 17, fontWeight: '800', color: '#0F172A' },
+    panelSubtitle: { fontSize: 12, color: '#94A3B8', marginTop: 2 },
+    loadingPanel: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
+    loadingPanelText: { fontSize: 14, color: '#64748B' },
+    emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
+    emptyStateText: { fontSize: 15, color: '#94A3B8', fontWeight: '500' },
+    inviteTitle: { fontSize: 17, fontWeight: '700', color: '#1E293B', textAlign: 'center' },
+    inviteSubtitle: { fontSize: 13, color: '#94A3B8', textAlign: 'center', lineHeight: 20, paddingHorizontal: 24 },
+    retryBtn: {
+        flexDirection: 'row', alignItems: 'center', gap: 6,
+        paddingVertical: 8, paddingHorizontal: 16, borderRadius: 12, borderWidth: 1, borderColor: '#E2E8F0',
+    },
+    retryBtnText: { fontSize: 13, color: '#64748B', fontWeight: '600' },
+    tripListContent: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 20 },
+
+    // Trip cards (vertical list)
+    tripCard: {
+        backgroundColor: '#FFF', borderRadius: 16, padding: 14, gap: 10,
+        borderWidth: 1, borderColor: '#F1F5F9',
+        shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.06, shadowRadius: 4, elevation: 2,
+    },
+    tripCardBooked: { borderWidth: 1.5, borderColor: '#BAE6FD', backgroundColor: '#F0F9FF' },
+    tripCardHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    tripCardAvatar: {
+        width: 36, height: 36, borderRadius: 18,
+        backgroundColor: '#0F172A', justifyContent: 'center', alignItems: 'center',
+    },
+    tripCardAvatarText: { color: '#38BDF8', fontSize: 14, fontWeight: '800' },
+    tripCardDriverName: { fontSize: 14, fontWeight: '700', color: '#0F172A' },
+    tripCardVehicle: { fontSize: 11, color: '#94A3B8', marginTop: 1 },
+    tripCardBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 10 },
+    tripCardBadgeText: { fontSize: 10, fontWeight: '700' },
+    tripCardInfo: { flexDirection: 'row', gap: 14, flexWrap: 'wrap' },
+    tripCardInfoItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    tripCardInfoText: { fontSize: 12, color: '#64748B' },
+    tripCardActions: { flexDirection: 'row', gap: 8 },
+    tripCardRouteBtn: {
+        flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5,
+        paddingVertical: 10, borderRadius: 10,
+        borderWidth: 1.5, borderColor: '#0EA5E9', backgroundColor: 'transparent',
+    },
+    tripCardRouteBtnActive: { backgroundColor: '#0EA5E9', borderColor: '#0EA5E9' },
+    tripCardRouteBtnText: { fontSize: 13, fontWeight: '700', color: '#0EA5E9' },
+    tripCardRouteBtnTextActive: { color: '#FFF' },
+    tripCardBookBtn: {
+        flex: 1, paddingVertical: 10, borderRadius: 10,
+        backgroundColor: '#0EA5E9', alignItems: 'center',
+    },
+    tripCardBookBtnDisabled: { backgroundColor: '#CBD5E1' },
+    tripCardBookBtnBooked: { backgroundColor: '#10B981' },
+    tripCardBookBtnText: { fontSize: 13, fontWeight: '700', color: '#FFF' },
+
+    // Mis Reservas button (in panel header)
     myBookingsBtn: {
         flexDirection: 'row', alignItems: 'center', gap: 6,
-        alignSelf: 'center', backgroundColor: '#FFF',
-        paddingVertical: 7, paddingHorizontal: 14, borderRadius: 20,
+        backgroundColor: '#FFF', paddingVertical: 7, paddingHorizontal: 12, borderRadius: 20,
         borderWidth: 1, borderColor: '#E2E8F0',
-        shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.07, shadowRadius: 4, elevation: 2,
     },
     myBookingsBtnActive: { borderColor: '#BAE6FD', backgroundColor: '#F0F9FF' },
     myBookingsBtnText: { fontSize: 12, fontWeight: '600', color: '#64748B' },
@@ -850,16 +1005,26 @@ const styles = StyleSheet.create({
     },
     fabSecondaryText: { color: '#10B981', fontSize: 14, fontWeight: '700' },
 
-    // Trip marker
-    tripMarker: {
+    // Dropoff point marker on map
+    dropoffMarker: {
         flexDirection: 'row', alignItems: 'center', gap: 4,
-        borderRadius: 20, paddingVertical: 6, paddingHorizontal: 10,
-        shadowColor: '#000', shadowOffset: { width: 0, height: 3 },
-        shadowOpacity: 0.4, shadowRadius: 6, elevation: 6,
+        backgroundColor: '#10B981', borderRadius: 20,
+        paddingVertical: 6, paddingHorizontal: 10,
+        shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.3, shadowRadius: 4, elevation: 6,
     },
-    tripMarkerText: { color: '#FFF', fontSize: 12, fontWeight: '800' },
+    dropoffMarkerText: { color: '#FFF', fontSize: 11, fontWeight: '700' },
 
-    // Bottom sheet
+    // Stop markers on map
+    stopMarker: {
+        flexDirection: 'row', alignItems: 'center', gap: 3,
+        backgroundColor: '#0EA5E9', borderRadius: 14, paddingVertical: 5, paddingHorizontal: 8,
+        shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.3, shadowRadius: 4, elevation: 5,
+    },
+    stopMarkerText: { color: '#FFF', fontSize: 10, fontWeight: '700', maxWidth: 70 },
+
+    // Bottom sheet (TripSheet modal)
     backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.4)' },
     sheet: {
         position: 'absolute', bottom: 0, left: 0, right: 0,
@@ -882,7 +1047,6 @@ const styles = StyleSheet.create({
     driverInfo: { flex: 1 },
     driverName: { fontSize: 20, fontWeight: '800', color: '#0F172A' },
     vehicleText: { fontSize: 14, color: '#64748B', marginTop: 2 },
-
     infoRow: { flexDirection: 'row', gap: 10, marginBottom: 24 },
     infoCard: {
         flex: 1, backgroundColor: '#F8FAFC', borderRadius: 16,
@@ -891,8 +1055,6 @@ const styles = StyleSheet.create({
     },
     infoValue: { fontSize: 13, fontWeight: '800', color: '#0F172A', textAlign: 'center' },
     infoLabel: { fontSize: 11, color: '#94A3B8', textAlign: 'center' },
-
-    // Booking status card (already booked)
     bookingStatusCard: {
         borderRadius: 16, borderWidth: 1.5, padding: 16, gap: 12, backgroundColor: '#FAFAFA',
     },
@@ -905,42 +1067,6 @@ const styles = StyleSheet.create({
         paddingVertical: 10, backgroundColor: '#FFF5F5',
     },
     cancelBookingBtnText: { fontSize: 14, fontWeight: '700', color: '#EF4444' },
-
-    // Trip cards list
-    tripCardsList: { paddingHorizontal: 4, gap: 10, paddingVertical: 2 },
-    tripCard: {
-        width: 260, backgroundColor: '#FFF', borderRadius: 18, padding: 14, gap: 10,
-        shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1, shadowRadius: 8, elevation: 5,
-    },
-    tripCardBooked: { borderWidth: 1.5, borderColor: '#BAE6FD' },
-    tripCardHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    tripCardAvatar: {
-        width: 34, height: 34, borderRadius: 17,
-        backgroundColor: '#0F172A', justifyContent: 'center', alignItems: 'center',
-    },
-    tripCardAvatarText: { color: '#38BDF8', fontSize: 14, fontWeight: '800' },
-    tripCardDriverName: { fontSize: 14, fontWeight: '700', color: '#0F172A' },
-    tripCardVehicle: { fontSize: 11, color: '#94A3B8', marginTop: 1 },
-    tripCardBadge: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 10 },
-    tripCardBadgeText: { fontSize: 10, fontWeight: '700' },
-    tripCardInfo: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-    tripCardInfoItem: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-    tripCardInfoText: { fontSize: 12, color: '#64748B' },
-    tripCardActions: { flexDirection: 'row', gap: 8 },
-    tripCardDetailBtn: {
-        flex: 1, paddingVertical: 8, borderRadius: 10,
-        borderWidth: 1, borderColor: '#E2E8F0', alignItems: 'center',
-    },
-    tripCardDetailBtnText: { fontSize: 12, fontWeight: '600', color: '#64748B' },
-    tripCardBookBtn: {
-        flex: 1, paddingVertical: 8, borderRadius: 10,
-        backgroundColor: '#0EA5E9', alignItems: 'center',
-    },
-    tripCardBookBtnDisabled: { backgroundColor: '#94A3B8' },
-    tripCardBookBtnText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
-
-    // Price + match badge
     priceMatchRow: {
         flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
         marginBottom: 16, gap: 8,
@@ -957,27 +1083,6 @@ const styles = StyleSheet.create({
         paddingHorizontal: 10, paddingVertical: 5, borderRadius: 20,
     },
     matchBadgeText: { fontSize: 12, fontWeight: '700' },
-
-    // Destination search
-    destSearchContainer: { position: 'relative', zIndex: 20 },
-    destInput: {
-        height: 44, borderRadius: 22, backgroundColor: '#FFF', paddingHorizontal: 16,
-        fontSize: 14, color: '#0F172A',
-        shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1, shadowRadius: 6, elevation: 4,
-    },
-    destClearBtn: { position: 'absolute', right: 12, top: 12, zIndex: 21 },
-
-    // Stop markers
-    stopMarker: {
-        flexDirection: 'row', alignItems: 'center', gap: 3,
-        backgroundColor: '#0EA5E9', borderRadius: 14, paddingVertical: 5, paddingHorizontal: 8,
-        shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.3, shadowRadius: 4, elevation: 5,
-    },
-    stopMarkerText: { color: '#FFF', fontSize: 10, fontWeight: '700', maxWidth: 70 },
-
-    // Book button
     bookButton: {
         backgroundColor: '#0EA5E9', paddingVertical: 18, borderRadius: 16,
         flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
@@ -986,8 +1091,6 @@ const styles = StyleSheet.create({
     },
     bookButtonDisabled: { backgroundColor: '#94A3B8', shadowOpacity: 0 },
     bookButtonText: { color: '#FFF', fontSize: 17, fontWeight: '800' },
-
-    // Success state
     successContainer: { alignItems: 'center', paddingVertical: 32, gap: 12 },
     successIcon: { marginBottom: 8 },
     successTitle: { fontSize: 24, fontWeight: '900', color: '#0F172A' },

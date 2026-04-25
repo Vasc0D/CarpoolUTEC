@@ -205,6 +205,21 @@ export class TripsService {
     }
   }
 
+  async getClosestPoint(tripId: string, destLat: number, destLng: number): Promise<{ latitude: number; longitude: number }> {
+    const result = await this.tripsRepository.query(
+      `SELECT ST_AsGeoJSON(
+          ST_ClosestPoint(
+            (SELECT "routePolyline" FROM trips WHERE id = $1)::geometry,
+            ST_SetSRID(ST_MakePoint($3, $2), 4326)::geometry
+          )
+        ) AS closest_point`,
+      [tripId, destLat, destLng],
+    );
+    if (!result?.[0]?.closest_point) throw new NotFoundException('No se pudo calcular el punto');
+    const geoJson = JSON.parse(result[0].closest_point);
+    return { longitude: geoJson.coordinates[0], latitude: geoJson.coordinates[1] };
+  }
+
   async cancelTrip(tripId: string, driverId: string): Promise<Trip> {
     const trip = await this.tripsRepository.findOne({
       where: { id: tripId },

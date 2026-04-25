@@ -45,6 +45,15 @@ export class TripsController {
     return this.tripsService.getMyTrips(req.user.id);
   }
 
+  @Get(':tripId/closest-point')
+  getClosestPoint(
+    @Param('tripId') tripId: string,
+    @Query('destLat') destLat: string,
+    @Query('destLng') destLng: string,
+  ) {
+    return this.tripsService.getClosestPoint(tripId, parseFloat(destLat), parseFloat(destLng));
+  }
+
   @Get(':tripId')
   findOne(@Param('tripId') tripId: string) {
     return this.tripsService.findOne(tripId);
