@@ -6,7 +6,7 @@ import {
 import * as Location from 'expo-location';
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
 import { useAuthStore } from '../store/authStore';
@@ -339,6 +339,9 @@ export const HomeScreen = () => {
 
     const [activeDriverTrip, setActiveDriverTrip] = useState<DriverTripSummary | null>(null);
     const [cancelingDriverTrip, setCancelingDriverTrip] = useState(false);
+    const [startingDriverTrip, setStartingDriverTrip] = useState(false);
+    const [finishingDriverTrip, setFinishingDriverTrip] = useState(false);
+    const pulseAnim = useRef(new Animated.Value(1)).current;
 
     const [previewTrip, setPreviewTrip] = useState<TripMarker | null>(null);
     const [dropoffPoint, setDropoffPoint] = useState<{ latitude: number; longitude: number } | null>(null);
@@ -469,6 +472,35 @@ export const HomeScreen = () => {
         fetchActiveDriverTrip();
     }, [fetchTrips, fetchMyActiveBooking, fetchStopsCoverage, fetchActiveDriverTrip]);
 
+    useEffect(() => {
+        Animated.loop(
+            Animated.sequence([
+                Animated.timing(pulseAnim, { toValue: 0.3, duration: 800, useNativeDriver: true }),
+                Animated.timing(pulseAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
+            ])
+        ).start();
+    }, [pulseAnim]);
+
+    useEffect(() => {
+        if (appMode !== 'driver' || !activeDriverTrip?.routePolyline?.coordinates?.length) return;
+        const coords = activeDriverTrip.routePolyline.coordinates.map(c => ({
+            latitude: c[1],
+            longitude: c[0],
+        }));
+        setTimeout(() => {
+            mapRef.current?.fitToCoordinates(coords, {
+                edgePadding: { top: 80, right: 40, bottom: 380, left: 40 },
+                animated: true,
+            });
+        }, 500);
+    }, [activeDriverTrip?.id, appMode]);
+
+    useFocusEffect(
+        useCallback(() => {
+            if (appMode === 'driver') fetchActiveDriverTrip();
+        }, [appMode, fetchActiveDriverTrip])
+    );
+
     // ── Driver socket ─────────────────────────────────────────────────────────
     useEffect(() => {
         if (appMode !== 'driver' || !token) return;
@@ -481,8 +513,9 @@ export const HomeScreen = () => {
                 data.autoAccepted ? '¡Nuevo pasajero!' : '¡Nueva solicitud!',
                 data.autoAccepted
                     ? `${data.passengerName} se unió a tu viaje automáticamente.`
-                    : `${data.passengerName} quiere unirse a tu viaje. Acepta o rechaza en Mis Viajes.`,
+                    : `${data.passengerName} quiere unirse a tu viaje.`,
             );
+            fetchActiveDriverTrip();
         });
 
         return () => { socket.disconnect(); socketRef.current = null; };
@@ -594,6 +627,83 @@ export const HomeScreen = () => {
         );
     };
 
+    const handleAcceptBooking = async (bookingId: string) => {
+        try {
+            await axiosClient.patch(`/bookings/${bookingId}/accept`);
+            setActiveDriverTrip(prev => {
+                if (!prev) return null;
+                return {
+                    ...prev,
+                    availableSeats: prev.availableSeats - 1,
+                    bookings: prev.bookings.map(b =>
+                        b.id === bookingId ? { ...b, status: 'ACCEPTED' as const } : b
+                    ),
+                };
+            });
+        } catch (error: any) {
+            const msg = error.response?.data?.message || 'No se pudo aceptar la solicitud.';
+            Alert.alert('Error', Array.isArray(msg) ? msg.join('\n') : msg);
+        }
+    };
+
+    const handleRejectBooking = async (bookingId: string) => {
+        try {
+            await axiosClient.patch(`/bookings/${bookingId}/reject`);
+            setActiveDriverTrip(prev => {
+                if (!prev) return null;
+                return {
+                    ...prev,
+                    bookings: prev.bookings.map(b =>
+                        b.id === bookingId ? { ...b, status: 'REJECTED' as const } : b
+                    ),
+                };
+            });
+        } catch (error: any) {
+            const msg = error.response?.data?.message || 'No se pudo rechazar la solicitud.';
+            Alert.alert('Error', Array.isArray(msg) ? msg.join('\n') : msg);
+        }
+    };
+
+    const handleStartDriverTrip = async () => {
+        if (!activeDriverTrip) return;
+        setStartingDriverTrip(true);
+        try {
+            await axiosClient.patch(`/trips/${activeDriverTrip.id}/start`);
+            setActiveDriverTrip(prev => prev ? { ...prev, status: 'ACTIVE' } : null);
+        } catch (error: any) {
+            const msg = error.response?.data?.message || 'No se pudo iniciar el viaje.';
+            Alert.alert('Error', Array.isArray(msg) ? msg.join('\n') : msg);
+        } finally {
+            setStartingDriverTrip(false);
+        }
+    };
+
+    const handleFinishDriverTrip = async () => {
+        Alert.alert(
+            'Finalizar viaje',
+            '¿Confirmas que has llegado al destino?',
+            [
+                { text: 'No', style: 'cancel' },
+                {
+                    text: 'Sí, finalizar',
+                    onPress: async () => {
+                        if (!activeDriverTrip) return;
+                        setFinishingDriverTrip(true);
+                        try {
+                            await axiosClient.patch(`/trips/${activeDriverTrip.id}/finish`);
+                            setActiveDriverTrip(null);
+                        } catch (error: any) {
+                            const msg = error.response?.data?.message || 'No se pudo finalizar el viaje.';
+                            Alert.alert('Error', Array.isArray(msg) ? msg.join('\n') : msg);
+                        } finally {
+                            setFinishingDriverTrip(false);
+                        }
+                    },
+                },
+            ]
+        );
+    };
+
     const handleCloseSheet = () => {
         setSelectedTrip(null);
         setBookedTripId(null);
@@ -653,6 +763,16 @@ export const HomeScreen = () => {
                                     <Text style={styles.dropoffMarkerText}>Te bajan aquí</Text>
                                 </View>
                             </Marker>
+                        )}
+                        {appMode === 'driver' && activeDriverTrip?.routePolyline?.coordinates && activeDriverTrip.routePolyline.coordinates.length > 0 && (
+                            <Polyline
+                                coordinates={activeDriverTrip.routePolyline.coordinates.map(c => ({
+                                    latitude: c[1],
+                                    longitude: c[0],
+                                }))}
+                                strokeColor="#10B981"
+                                strokeWidth={4}
+                            />
                         )}
                     </MapView>
                 ) : (
@@ -917,70 +1037,55 @@ export const HomeScreen = () => {
                 <View style={[styles.bottomOverlay, { bottom: insets.bottom + 16 }]}>
                     {isDriver ? (
                         activeDriverTrip ? (() => {
-                            const accepted = activeDriverTrip.bookings.filter(b => b.status === 'ACCEPTED');
-                            const total = activeDriverTrip.availableSeats + accepted.length;
-                            const visibleBookings = activeDriverTrip.bookings.filter(
-                                b => b.status === 'PENDING' || b.status === 'ACCEPTED'
+                            const activeBookings = activeDriverTrip.bookings.filter(
+                                b => b.status !== 'REJECTED' && b.status !== 'CANCELED'
                             );
+                            const canStart = activeDriverTrip.status === 'SCHEDULED' &&
+                                new Date() >= new Date(activeDriverTrip.departureTime);
                             return (
                                 <View style={styles.driverTripCard}>
                                     {/* Header */}
                                     <View style={styles.driverTripCardHeader}>
                                         <View style={styles.driverTripCardTitleRow}>
-                                            <Ionicons name="car-sport-outline" size={16} color="#FFF" />
+                                            <Animated.View style={[styles.driverTripPulseDot, { opacity: pulseAnim }]} />
                                             <Text style={styles.driverTripCardTitle}>Viaje publicado</Text>
                                         </View>
-                                        <View style={[
-                                            styles.driverTripStatusBadge,
-                                            { backgroundColor: activeDriverTrip.status === 'ACTIVE' ? '#DBEAFE' : '#DCFCE7' },
-                                        ]}>
-                                            <Text style={[
-                                                styles.driverTripStatusText,
-                                                { color: activeDriverTrip.status === 'ACTIVE' ? '#2563EB' : '#16A34A' },
-                                            ]}>
-                                                {activeDriverTrip.status === 'ACTIVE' ? 'En curso' : 'En espera'}
+                                        <TouchableOpacity
+                                            onPress={() => handleCancelDriverTrip(activeDriverTrip.id)}
+                                            disabled={cancelingDriverTrip}
+                                        >
+                                            {cancelingDriverTrip
+                                                ? <ActivityIndicator size="small" color="#FECACA" />
+                                                : <Text style={styles.driverTripCancelHeaderBtnText}>Cancelar</Text>
+                                            }
+                                        </TouchableOpacity>
+                                    </View>
+
+                                    {/* Stats */}
+                                    <View style={styles.driverTripStats}>
+                                        <View style={styles.driverTripStatItem}>
+                                            <Ionicons name="time-outline" size={13} color="#64748B" />
+                                            <Text style={styles.driverTripStatText}>
+                                                {formatTime(activeDriverTrip.departureTime)}
+                                            </Text>
+                                        </View>
+                                        <View style={styles.driverTripStatItem}>
+                                            <Ionicons name="people-outline" size={13} color="#64748B" />
+                                            <Text style={styles.driverTripStatText}>
+                                                {activeDriverTrip.availableSeats} asiento{activeDriverTrip.availableSeats !== 1 ? 's' : ''} libre{activeDriverTrip.availableSeats !== 1 ? 's' : ''}
                                             </Text>
                                         </View>
                                     </View>
 
-                                    <ScrollView style={{ maxHeight: 220 }} showsVerticalScrollIndicator={false}>
-                                        {/* Route visual */}
-                                        <View style={styles.driverTripRoute}>
-                                            <View style={styles.driverTripRouteDots}>
-                                                <View style={styles.driverTripOriginDot} />
-                                                <View style={styles.driverTripRouteLine} />
-                                                <View style={styles.driverTripDestDot} />
-                                            </View>
-                                            <View style={{ flex: 1, justifyContent: 'space-between', height: 36 }}>
-                                                <Text style={styles.driverTripRouteLabel}>UTEC</Text>
-                                                <Text style={styles.driverTripRouteLabel}>Destino</Text>
-                                            </View>
-                                        </View>
-
-                                        {/* Metadata */}
-                                        <View style={styles.driverTripMeta}>
-                                            <View style={styles.driverTripMetaItem}>
-                                                <Ionicons name="time-outline" size={13} color="#64748B" />
-                                                <Text style={styles.driverTripMetaText}>
-                                                    {formatTime(activeDriverTrip.departureTime)}
+                                    {/* Passenger list */}
+                                    <ScrollView style={{ maxHeight: 200 }} showsVerticalScrollIndicator={false}>
+                                        {activeBookings.length === 0 ? (
+                                            <View style={styles.driverTripEmptyPassengers}>
+                                                <Text style={styles.driverTripEmptyPassengersText}>
+                                                    Aún no hay pasajeros
                                                 </Text>
                                             </View>
-                                            <View style={styles.driverTripMetaItem}>
-                                                <Ionicons name="cash-outline" size={13} color="#64748B" />
-                                                <Text style={styles.driverTripMetaText}>
-                                                    S/ {Number(activeDriverTrip.pricePerSeat ?? 0).toFixed(2)}
-                                                </Text>
-                                            </View>
-                                            <View style={styles.driverTripMetaItem}>
-                                                <Ionicons name="people-outline" size={13} color="#64748B" />
-                                                <Text style={styles.driverTripMetaText}>
-                                                    {accepted.length}/{total}
-                                                </Text>
-                                            </View>
-                                        </View>
-
-                                        {/* Passenger list */}
-                                        {visibleBookings.map(b => (
+                                        ) : activeBookings.map(b => (
                                             <View key={b.id} style={styles.driverTripPassengerRow}>
                                                 <View style={styles.driverTripPassengerAvatar}>
                                                     <Text style={styles.driverTripPassengerAvatarText}>
@@ -990,50 +1095,80 @@ export const HomeScreen = () => {
                                                 <Text style={styles.driverTripPassengerName} numberOfLines={1}>
                                                     {b.passenger.name}
                                                 </Text>
-                                                <View style={[
-                                                    styles.driverTripPassengerBadge,
-                                                    { backgroundColor: b.status === 'ACCEPTED' ? '#DCFCE7' : '#FEF9C3' },
-                                                ]}>
-                                                    <Text style={[
-                                                        styles.driverTripPassengerBadgeText,
-                                                        { color: b.status === 'ACCEPTED' ? '#16A34A' : '#B45309' },
+                                                {b.status === 'PENDING' ? (
+                                                    <View style={styles.driverTripPassengerActions}>
+                                                        <TouchableOpacity
+                                                            style={[styles.driverTripPassengerActionBtn, { backgroundColor: '#DCFCE7' }]}
+                                                            onPress={() => handleAcceptBooking(b.id)}
+                                                        >
+                                                            <Ionicons name="checkmark" size={16} color="#16A34A" />
+                                                        </TouchableOpacity>
+                                                        <TouchableOpacity
+                                                            style={[styles.driverTripPassengerActionBtn, { backgroundColor: '#FEE2E2' }]}
+                                                            onPress={() => handleRejectBooking(b.id)}
+                                                        >
+                                                            <Ionicons name="close" size={16} color="#DC2626" />
+                                                        </TouchableOpacity>
+                                                    </View>
+                                                ) : (
+                                                    <View style={[
+                                                        styles.driverTripPassengerBadge,
+                                                        {
+                                                            backgroundColor:
+                                                                b.status === 'ACCEPTED' ? '#DCFCE7' :
+                                                                b.status === 'COMPLETED' ? '#DBEAFE' :
+                                                                '#F1F5F9',
+                                                        },
                                                     ]}>
-                                                        {b.status === 'ACCEPTED' ? 'Confirmado' : 'Pendiente'}
-                                                    </Text>
-                                                </View>
+                                                        <Text style={[
+                                                            styles.driverTripPassengerBadgeText,
+                                                            {
+                                                                color:
+                                                                    b.status === 'ACCEPTED' ? '#16A34A' :
+                                                                    b.status === 'COMPLETED' ? '#2563EB' :
+                                                                    '#64748B',
+                                                            },
+                                                        ]}>
+                                                            {b.status === 'ACCEPTED' ? 'Confirmado' :
+                                                             b.status === 'COMPLETED' ? 'Completado' : b.status}
+                                                        </Text>
+                                                    </View>
+                                                )}
                                             </View>
                                         ))}
-
-                                        {/* Seat slots */}
-                                        <View style={styles.driverTripSlots}>
-                                            {Array.from({ length: total }).map((_, i) => (
-                                                <View
-                                                    key={i}
-                                                    style={[
-                                                        styles.driverTripSlot,
-                                                        i < accepted.length && styles.driverTripSlotFilled,
-                                                    ]}
-                                                />
-                                            ))}
-                                        </View>
                                     </ScrollView>
 
-                                    {/* Cancel button */}
-                                    <TouchableOpacity
-                                        style={styles.driverTripCancelBtn}
-                                        onPress={() => handleCancelDriverTrip(activeDriverTrip.id)}
-                                        disabled={cancelingDriverTrip}
-                                        activeOpacity={0.75}
-                                    >
-                                        {cancelingDriverTrip ? (
-                                            <ActivityIndicator size="small" color="#EF4444" />
-                                        ) : (
-                                            <>
-                                                <Ionicons name="close-circle-outline" size={15} color="#EF4444" />
-                                                <Text style={styles.driverTripCancelBtnText}>Cancelar viaje</Text>
-                                            </>
-                                        )}
-                                    </TouchableOpacity>
+                                    {/* Iniciar / Finalizar */}
+                                    {canStart && (
+                                        <TouchableOpacity
+                                            style={[styles.driverTripActionBtn, { backgroundColor: '#0EA5E9' }]}
+                                            onPress={handleStartDriverTrip}
+                                            disabled={startingDriverTrip}
+                                        >
+                                            {startingDriverTrip
+                                                ? <ActivityIndicator color="#FFF" />
+                                                : <>
+                                                    <Ionicons name="play-circle-outline" size={18} color="#FFF" />
+                                                    <Text style={styles.driverTripActionBtnText}>Iniciar Viaje</Text>
+                                                  </>
+                                            }
+                                        </TouchableOpacity>
+                                    )}
+                                    {activeDriverTrip.status === 'ACTIVE' && (
+                                        <TouchableOpacity
+                                            style={[styles.driverTripActionBtn, { backgroundColor: '#EF4444' }]}
+                                            onPress={handleFinishDriverTrip}
+                                            disabled={finishingDriverTrip}
+                                        >
+                                            {finishingDriverTrip
+                                                ? <ActivityIndicator color="#FFF" />
+                                                : <>
+                                                    <Ionicons name="flag-outline" size={18} color="#FFF" />
+                                                    <Text style={styles.driverTripActionBtnText}>Finalizar Viaje</Text>
+                                                  </>
+                                            }
+                                        </TouchableOpacity>
+                                    )}
                                 </View>
                             );
                         })() : (
@@ -1305,6 +1440,38 @@ const styles = StyleSheet.create({
         marginBottom: 14,
     },
     driverTripCancelBtnText: { fontSize: 13, fontWeight: '700', color: '#EF4444' },
+    driverTripPulseDot: {
+        width: 8, height: 8, borderRadius: 4, backgroundColor: '#ECFDF5',
+    },
+    driverTripCancelHeaderBtnText: { fontSize: 13, fontWeight: '700', color: '#FECACA' },
+    driverTripStats: {
+        flexDirection: 'row' as const,
+        gap: 16,
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        borderBottomWidth: 1,
+        borderBottomColor: '#F1F5F9',
+    },
+    driverTripStatItem: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 4 },
+    driverTripStatText: { fontSize: 13, fontWeight: '600' as const, color: '#64748B' },
+    driverTripEmptyPassengers: { alignItems: 'center' as const, paddingVertical: 16 },
+    driverTripEmptyPassengersText: { fontSize: 13, color: '#94A3B8', fontStyle: 'italic' as const },
+    driverTripPassengerActions: { flexDirection: 'row' as const, gap: 6 },
+    driverTripPassengerActionBtn: {
+        width: 32, height: 32, borderRadius: 10, justifyContent: 'center' as const, alignItems: 'center' as const,
+    },
+    driverTripActionBtn: {
+        flexDirection: 'row' as const,
+        alignItems: 'center' as const,
+        justifyContent: 'center' as const,
+        gap: 8,
+        marginHorizontal: 16,
+        marginBottom: 14,
+        marginTop: 6,
+        paddingVertical: 14,
+        borderRadius: 14,
+    },
+    driverTripActionBtnText: { fontSize: 15, fontWeight: '800' as const, color: '#FFF' },
 
     // Dropoff point marker on map
     dropoffMarker: {
