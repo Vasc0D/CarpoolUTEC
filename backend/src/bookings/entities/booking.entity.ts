@@ -31,6 +31,12 @@ export class Booking {
     @Column({ default: false })
     isBoarded: boolean;
 
+    @Column({ type: 'decimal', precision: 9, scale: 6, nullable: true })
+    destLat: number | null;
+
+    @Column({ type: 'decimal', precision: 9, scale: 6, nullable: true })
+    destLng: number | null;
+
     @Column({
         type: 'geometry',
         spatialFeatureType: 'Point',

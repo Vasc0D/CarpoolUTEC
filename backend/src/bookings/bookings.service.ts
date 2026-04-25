@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException, GoneException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException, GoneException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { Booking, BookingStatus } from './entities/booking.entity';
@@ -6,9 +6,13 @@ import { Trip, TripStatus } from '../trips/entities/trip.entity';
 import { UsersService } from '../users/users.service';
 import { BookingResponseDto } from './dto/booking-response.dto';
 import { NotificationsService } from '../notifications/notifications.service';
+import { DirectionsService } from '../geo/directions.service';
+import { GeoService } from '../geo/geo.service';
 
 @Injectable()
 export class BookingsService {
+  private readonly logger = new Logger(BookingsService.name);
+
   constructor(
     @InjectRepository(Booking)
     private readonly bookingsRepository: Repository<Booking>,
@@ -16,9 +20,11 @@ export class BookingsService {
     private readonly tripsRepository: Repository<Trip>,
     private readonly usersService: UsersService,
     private readonly notificationsService: NotificationsService,
+    private readonly directionsService: DirectionsService,
+    private readonly geoService: GeoService,
   ) { }
 
-  async solicitSeat(tripId: string, passengerId: string): Promise<BookingResponseDto> {
+  async solicitSeat(tripId: string, passengerId: string, destLat?: number, destLng?: number): Promise<BookingResponseDto> {
     const trip = await this.tripsRepository.findOne({
       where: { id: tripId },
       relations: ['driver']
@@ -48,23 +54,27 @@ export class BookingsService {
       trip,
       passenger,
       status: isAutoAccept ? BookingStatus.ACCEPTED : BookingStatus.PENDING,
+      destLat: destLat ?? null,
+      destLng: destLng ?? null,
     });
 
     if (isAutoAccept) {
       trip.availableSeats -= 1;
       await this.tripsRepository.save(trip);
+
+      if (trip.detourEnabled && destLat != null && destLng != null) {
+        await this.recalculateRoute(trip, passengerId, destLat, destLng);
+      }
     }
 
     const savedBooking = await this.bookingsRepository.save(booking);
 
-    // Notificar al conductor SIEMPRE (tanto autoAccept como manual)
-    // El frontend diferencia con el campo "autoAccepted" para mostrar el mensaje correcto
     this.notificationsService.notifyDriverNewRequest(trip.driver.id, {
       bookingId: savedBooking.id,
       passengerId,
       passengerName: passenger.name,
       tripId,
-      autoAccepted: isAutoAccept, // true = ya confirmado, false = requiere aprobación
+      autoAccepted: isAutoAccept,
     });
 
     return this.mapToResponseDto(savedBooking);
@@ -85,6 +95,14 @@ export class BookingsService {
     booking.trip.availableSeats -= 1;
 
     await this.tripsRepository.save(booking.trip);
+
+    const destLat = booking.destLat != null ? Number(booking.destLat) : null;
+    const destLng = booking.destLng != null ? Number(booking.destLng) : null;
+
+    if (booking.trip.detourEnabled && destLat != null && destLng != null) {
+      await this.recalculateRoute(booking.trip, booking.passenger.id, destLat, destLng);
+    }
+
     const savedBooking = await this.bookingsRepository.save(booking);
 
     this.notificationsService.notifyPassengerStatusChange(booking.passenger.id, {
@@ -93,6 +111,28 @@ export class BookingsService {
     });
 
     return this.mapToResponseDto(savedBooking);
+  }
+
+  private async recalculateRoute(trip: Trip, passengerId: string, destLat: number, destLng: number): Promise<void> {
+    try {
+      const coords: number[][] = trip.routePolyline?.coordinates;
+      if (!coords?.length || coords.length < 2) return;
+
+      const origin = { lat: coords[0][1], lng: coords[0][0] };
+      const finalDest = { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
+      const existingWaypoints = (trip.passengerWaypoints ?? []).map(w => ({ lat: w.lat, lng: w.lng }));
+      const allWaypoints = [origin, ...existingWaypoints, { lat: destLat, lng: destLng }, finalDest];
+
+      const { polylinePoints } = await this.directionsService.getRoute(allWaypoints);
+      trip.routePolyline = this.geoService.createLineString(polylinePoints);
+      trip.passengerWaypoints = [
+        ...(trip.passengerWaypoints ?? []),
+        { passengerId, lat: destLat, lng: destLng },
+      ];
+      await this.tripsRepository.save(trip);
+    } catch (e) {
+      this.logger.error(`Error recalculando ruta para viaje ${trip.id}: ${e.message}`);
+    }
   }
 
   async rejectBooking(bookingId: string, driverId: string): Promise<BookingResponseDto> {

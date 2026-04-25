@@ -13,6 +13,10 @@ export class CreateTripDto {
     @IsOptional()
     autoAccept?: boolean;
 
+    @IsBoolean()
+    @IsOptional()
+    detourEnabled?: boolean;
+
     @IsOptional()
     availableSeats?: number;
 

@@ -27,6 +27,15 @@ export class Trip {
   @Column({ type: 'int', default: 5 })
   maxDetourMinutes: number;
 
+  @Column({ default: false })
+  detourEnabled: boolean;
+
+  @Column({ type: 'int', default: 0 })
+  originalDurationSeconds: number;
+
+  @Column({ type: 'json', nullable: true })
+  passengerWaypoints: { passengerId: string; lat: number; lng: number }[] | null;
+
   @Column({ type: 'timestamp' })
   departureTime: Date;
 

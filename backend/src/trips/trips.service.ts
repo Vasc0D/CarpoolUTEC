@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, In, LessThan, Repository } from 'typeorm';
 import { Cron } from '@nestjs/schedule';
@@ -8,9 +8,12 @@ import { UsersService } from '../users/users.service';
 import { Booking, BookingStatus } from '../bookings/entities/booking.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { GeoService } from '../geo/geo.service';
+import { DirectionsService } from '../geo/directions.service';
 
 @Injectable()
 export class TripsService {
+  private readonly logger = new Logger(TripsService.name);
+
   constructor(
     @InjectRepository(Trip)
     private readonly tripsRepository: Repository<Trip>,
@@ -19,12 +22,12 @@ export class TripsService {
     private readonly usersService: UsersService,
     private readonly notificationsService: NotificationsService,
     private readonly geoService: GeoService,
+    private readonly directionsService: DirectionsService,
   ) { }
 
   async create(userId: string, createTripDto: CreateTripDto): Promise<Trip> {
     const user = await this.usersService.findByIdWithVehicle(userId);
 
-    // Regla: Debe tener vehículo para publicar viaje
     if (!user || !user.vehicle) {
       throw new ForbiddenException('Debes registrar un vehículo para publicar viajes');
     }
@@ -47,58 +50,128 @@ export class TripsService {
       throw new ConflictException('Ya tienes un viaje programado para ese día');
     }
 
+    const origin = { lat: createTripDto.route[0][0], lng: createTripDto.route[0][1] };
+    const destination = {
+      lat: createTripDto.route[createTripDto.route.length - 1][0],
+      lng: createTripDto.route[createTripDto.route.length - 1][1],
+    };
+
+    let finalRoute = createTripDto.route;
+    let originalDurationSeconds = 0;
+
+    try {
+      const { polylinePoints, durationSeconds } = await this.directionsService.getRoute([origin, destination]);
+      finalRoute = polylinePoints;
+      originalDurationSeconds = durationSeconds;
+    } catch (e) {
+      this.logger.warn(`DirectionsService falló al crear viaje, usando ruta del frontend: ${e.message}`);
+    }
+
     const trip = this.tripsRepository.create({
       driver: user,
-      routePolyline: this.geoService.createLineString(createTripDto.route),
+      routePolyline: this.geoService.createLineString(finalRoute),
       departureTime: new Date(createTripDto.departureTime),
       autoAccept: createTripDto.autoAccept || false,
       availableSeats: createTripDto.availableSeats ?? user.vehicle.capacity,
       maxDetourMinutes: createTripDto.maxDetourMinutes ?? 5,
       pricePerSeat: createTripDto.pricePerSeat ?? 0,
       meetingPoint: createTripDto.meetingPoint,
+      detourEnabled: createTripDto.detourEnabled ?? false,
+      originalDurationSeconds,
       status: TripStatus.SCHEDULED,
     });
-    // TODO: Integrar Google Maps Directions API para obtener el Polyline real de la ruta antes de guardar.
 
     return this.tripsRepository.save(trip);
   }
 
   async findAvailableTrips(lat: number, lng: number, destLat?: number, destLng?: number): Promise<any[]> {
-    const qb = this.tripsRepository.createQueryBuilder('trip')
-      .leftJoin('trip.driver', 'driver')
-      .leftJoin('driver.vehicle', 'vehicle')
-      .addSelect(['driver.id', 'driver.name', 'vehicle.model', 'vehicle.color', 'vehicle.brand', 'vehicle.plate'])
-      .where('trip.status = :status', { status: TripStatus.SCHEDULED })
-      .andWhere('trip.availableSeats > 0')
-      .andWhere('trip.departureTime > :now', { now: new Date() })
-      .andWhere(this.geoService.getDWithinCondition('trip."routePolyline"', lat, lng, 500));
+    const buildBase = () =>
+      this.tripsRepository.createQueryBuilder('trip')
+        .leftJoin('trip.driver', 'driver')
+        .leftJoin('driver.vehicle', 'vehicle')
+        .addSelect(['driver.id', 'driver.name', 'vehicle.model', 'vehicle.color', 'vehicle.brand', 'vehicle.plate'])
+        .where('trip.status = :status', { status: TripStatus.SCHEDULED })
+        .andWhere('trip.availableSeats > 0')
+        .andWhere('trip.departureTime > :now', { now: new Date() })
+        .andWhere(this.geoService.getDWithinCondition('trip."routePolyline"', lat, lng, 500));
 
-    if (destLat !== undefined && destLng !== undefined) {
-      qb.addSelect(
-        `ST_Distance(trip."routePolyline"::geography, ST_SetSRID(ST_MakePoint(${destLng}, ${destLat}), 4326)::geography)`,
-        'distanceToDestination',
-      ).andWhere(this.geoService.getDWithinCondition('trip."routePolyline"', destLat, destLng, 800));
-
-      const { entities, raw } = await qb.getRawAndEntities();
-
-      const result = entities.map((entity, i) => {
-        const dist = parseFloat(raw[i].distanceToDestination ?? '9999');
-        return {
-          ...entity,
-          distanceToDestination: Math.round(dist),
-          matchType: dist <= 200 ? 'exact' : 'near',
-        };
-      });
-
-      result.sort((a, b) => {
-        if (a.matchType !== b.matchType) return a.matchType === 'exact' ? -1 : 1;
-        return a.distanceToDestination - b.distanceToDestination;
-      });
-
-      return result;
+    if (destLat === undefined || destLng === undefined) {
+      return buildBase().getMany();
     }
 
-    return qb.getMany();
+    // Non-detour trips: use existing distance-based matching
+    const nonDetourQb = buildBase()
+      .andWhere('trip.detourEnabled = :detour', { detour: false })
+      .addSelect(
+        `ST_Distance(trip."routePolyline"::geography, ST_SetSRID(ST_MakePoint(${destLng}, ${destLat}), 4326)::geography)`,
+        'distanceToDestination',
+      )
+      .andWhere(this.geoService.getDWithinCondition('trip."routePolyline"', destLat, destLng, 800));
+
+    // Detour-enabled trips: origin filter only, dest filter done via Directions API
+    const detourQb = buildBase()
+      .andWhere('trip.detourEnabled = :detour', { detour: true });
+
+    const [{ entities: nonDetourEntities, raw: nonDetourRaw }, detourTrips] = await Promise.all([
+      nonDetourQb.getRawAndEntities(),
+      detourQb.getMany(),
+    ]);
+
+    const nonDetourResults = nonDetourEntities.map((entity, i) => {
+      const dist = parseFloat(nonDetourRaw[i].distanceToDestination ?? '9999');
+      return {
+        ...entity,
+        distanceToDestination: Math.round(dist),
+        matchType: dist <= 200 ? 'exact' : 'near',
+      };
+    });
+
+    type DetourResult = Trip & { matchType: string; detourMinutes: number };
+
+    const detourResults = (
+      await Promise.all(
+        detourTrips.map(async (trip): Promise<DetourResult | null> => {
+          try {
+            const coords: number[][] = trip.routePolyline?.coordinates;
+            if (!coords?.length || coords.length < 2) return null;
+
+            const origin = { lat: coords[0][1], lng: coords[0][0] };
+            const finalDest = { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
+            const existingWaypoints = (trip.passengerWaypoints ?? []).map(w => ({ lat: w.lat, lng: w.lng }));
+            const allWaypoints = [origin, ...existingWaypoints, { lat: destLat, lng: destLng }, finalDest];
+
+            const { durationSeconds } = await this.directionsService.getRoute(allWaypoints);
+            const detourSeconds = durationSeconds - trip.originalDurationSeconds;
+            const detourMinutes = Math.round(detourSeconds / 60);
+
+            if (detourMinutes <= trip.maxDetourMinutes) {
+              return { ...trip, matchType: 'detour', detourMinutes };
+            }
+            return null;
+          } catch {
+            return null;
+          }
+        }),
+      )
+    ).filter((x): x is DetourResult => x !== null);
+
+    type AnyResult = (typeof nonDetourResults[0]) | DetourResult;
+    const combined: AnyResult[] = [...nonDetourResults, ...detourResults];
+
+    combined.sort((a, b) => {
+      const order: Record<string, number> = { exact: 0, detour: 1, near: 2 };
+      const aOrder = order[a.matchType] ?? 3;
+      const bOrder = order[b.matchType] ?? 3;
+      if (aOrder !== bOrder) return aOrder - bOrder;
+      const aDetour = (a as DetourResult).detourMinutes ?? 0;
+      const bDetour = (b as DetourResult).detourMinutes ?? 0;
+      if (a.matchType === 'detour') return aDetour - bDetour;
+      const aDist = (a as typeof nonDetourResults[0]).distanceToDestination ?? 0;
+      const bDist = (b as typeof nonDetourResults[0]).distanceToDestination ?? 0;
+      return aDist - bDist;
+    });
+
+    return combined;
   }
 
   async getStopsCoverage(stops: Array<{ id: string; lat: number; lng: number }>): Promise<Array<{ id: string; covered: boolean }>> {
@@ -257,9 +330,6 @@ export class TripsService {
 
     trip.status = TripStatus.CANCELED;
 
-    // TODO: Implementar sistema de penalidad por cancelar viajes programados.
-
-    // Cancelación en Cascada
     const bookingsToCancel = await this.bookingsRepository.find({
       where: { trip: { id: tripId } },
       relations: ['passenger']
@@ -272,7 +342,6 @@ export class TripsService {
       .andWhere("status IN (:...statuses)", { statuses: [BookingStatus.PENDING, BookingStatus.ACCEPTED] })
       .execute();
 
-    // Notificar a todos los pasajeros en tiempo real
     for (const b of bookingsToCancel) {
       if (b.passenger && (b.status === BookingStatus.PENDING || b.status === BookingStatus.ACCEPTED)) {
         this.notificationsService.notifyPassengerTripCanceled(b.passenger.id, { tripId: trip.id });

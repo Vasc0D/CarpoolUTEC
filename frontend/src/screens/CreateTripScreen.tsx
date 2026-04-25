@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, KeyboardAvoidingView, TouchableOpacity, Alert, Dimensions, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, KeyboardAvoidingView, TouchableOpacity, Switch, Alert, Dimensions, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
@@ -22,7 +22,8 @@ export const CreateTripScreen = () => {
     const [destination, setDestination] = useState<any>(null);
     const [routePoints, setRoutePoints] = useState<[number, number][]>([]);
     const [seats, setSeats] = useState(3);
-    const [detour, setDetour] = useState(5);
+    const [detour, setDetour] = useState(10);
+    const [detourEnabled, setDetourEnabled] = useState(false);
     const [loading, setLoading] = useState(false);
     const [departureTime, setDepartureTime] = useState(new Date());
     const [showTimePicker, setShowTimePicker] = useState(false);
@@ -46,7 +47,8 @@ export const CreateTripScreen = () => {
                 route: routePoints,
                 departureTime: departureTime.toISOString(),
                 availableSeats: seats,
-                maxDetourMinutes: detour,
+                detourEnabled,
+                maxDetourMinutes: detourEnabled ? detour : 0,
                 autoAccept,
                 meetingPoint: JSON.stringify({ type: 'Point', coordinates: [-77.021908, -12.135570] }),
             });
@@ -224,16 +226,29 @@ export const CreateTripScreen = () => {
                             </View>
 
                             <View style={styles.inputGroup}>
-                                <Text style={styles.label}>Desvío (min)</Text>
-                                <View style={styles.counter}>
-                                    <TouchableOpacity onPress={() => setDetour(Math.max(0, detour - 5))}>
-                                        <Ionicons name="remove-circle-outline" size={32} color="#64748B" />
-                                    </TouchableOpacity>
-                                    <Text style={styles.counterText}>{detour}</Text>
-                                    <TouchableOpacity onPress={() => setDetour(Math.min(30, detour + 5))}>
-                                        <Ionicons name="add-circle-outline" size={32} color="#64748B" />
-                                    </TouchableOpacity>
+                                <Text style={styles.label}>Desvío</Text>
+                                <View style={styles.detourRow}>
+                                    <Switch
+                                        value={detourEnabled}
+                                        onValueChange={setDetourEnabled}
+                                        trackColor={{ false: '#E2E8F0', true: '#BAE6FD' }}
+                                        thumbColor={detourEnabled ? '#0EA5E9' : '#94A3B8'}
+                                    />
+                                    <Text style={styles.detourLabel}>
+                                        {detourEnabled ? `${detour} min` : 'Off'}
+                                    </Text>
                                 </View>
+                                {detourEnabled && (
+                                    <View style={[styles.counter, { marginTop: 8 }]}>
+                                        <TouchableOpacity onPress={() => setDetour(Math.max(5, detour - 5))}>
+                                            <Ionicons name="remove-circle-outline" size={32} color="#64748B" />
+                                        </TouchableOpacity>
+                                        <Text style={styles.counterText}>{detour}</Text>
+                                        <TouchableOpacity onPress={() => setDetour(Math.min(30, detour + 5))}>
+                                            <Ionicons name="add-circle-outline" size={32} color="#64748B" />
+                                        </TouchableOpacity>
+                                    </View>
+                                )}
                             </View>
                         </View>
 
@@ -381,5 +396,19 @@ const styles = StyleSheet.create({
         fontSize: 14,
         color: '#374151',
         marginTop: 4,
+    },
+    detourRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        backgroundColor: '#F1F5F9',
+        borderRadius: 12,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+    },
+    detourLabel: {
+        fontSize: 14,
+        fontWeight: '700',
+        color: '#1E293B',
     },
 });

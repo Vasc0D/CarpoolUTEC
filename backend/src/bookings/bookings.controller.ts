@@ -1,4 +1,4 @@
-import { Controller, Post, Patch, Get, Param, UseGuards, Req } from '@nestjs/common';
+import { Controller, Post, Patch, Get, Param, UseGuards, Req, Body } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { BookingsService } from './bookings.service';
 
@@ -8,8 +8,12 @@ export class BookingsController {
   constructor(private readonly bookingsService: BookingsService) { }
 
   @Post(':tripId')
-  solicitSeat(@Param('tripId') tripId: string, @Req() req) {
-    return this.bookingsService.solicitSeat(tripId, req.user.id);
+  solicitSeat(
+    @Param('tripId') tripId: string,
+    @Req() req,
+    @Body() body: { destLat?: number; destLng?: number },
+  ) {
+    return this.bookingsService.solicitSeat(tripId, req.user.id, body.destLat, body.destLng);
   }
 
   @Patch(':bookingId/accept')

@@ -29,7 +29,8 @@ interface TripMarker {
     routePolyline: { coordinates: number[][] };
     pricePerSeat: number;
     distanceToDestination?: number;
-    matchType?: 'exact' | 'near';
+    matchType?: 'exact' | 'near' | 'detour';
+    detourMinutes?: number;
 }
 
 interface MeetingPointCoords {
@@ -181,18 +182,38 @@ const TripSheet: React.FC<TripSheetProps> = ({
                             {trip.matchType && (
                                 <View style={[
                                     styles.matchBadge,
-                                    { backgroundColor: trip.matchType === 'exact' ? '#DCFCE7' : '#FEF9C3' },
+                                    {
+                                        backgroundColor:
+                                            trip.matchType === 'exact' ? '#DCFCE7' :
+                                            trip.matchType === 'detour' ? '#FFF7ED' :
+                                            '#FEF9C3',
+                                    },
                                 ]}>
                                     <Ionicons
-                                        name={trip.matchType === 'exact' ? 'location' : 'navigate-outline'}
+                                        name={
+                                            trip.matchType === 'exact' ? 'location' :
+                                            trip.matchType === 'detour' ? 'git-branch-outline' :
+                                            'navigate-outline'
+                                        }
                                         size={12}
-                                        color={trip.matchType === 'exact' ? '#16A34A' : '#CA8A04'}
+                                        color={
+                                            trip.matchType === 'exact' ? '#16A34A' :
+                                            trip.matchType === 'detour' ? '#F97316' :
+                                            '#CA8A04'
+                                        }
                                     />
                                     <Text style={[
                                         styles.matchBadgeText,
-                                        { color: trip.matchType === 'exact' ? '#16A34A' : '#CA8A04' },
+                                        {
+                                            color:
+                                                trip.matchType === 'exact' ? '#16A34A' :
+                                                trip.matchType === 'detour' ? '#F97316' :
+                                                '#CA8A04',
+                                        },
                                     ]}>
-                                        {trip.matchType === 'exact' ? 'Te deja ahí' : 'Pasa cerca'}
+                                        {trip.matchType === 'exact' ? 'Te deja ahí' :
+                                         trip.matchType === 'detour' ? `Se desvía ~${trip.detourMinutes}min` :
+                                         'Pasa cerca'}
                                     </Text>
                                 </View>
                             )}
@@ -476,7 +497,10 @@ export const HomeScreen = () => {
     const handleBookSeat = async (tripId: string) => {
         setBookingTripId(tripId);
         try {
-            const { data } = await axiosClient.post(`/bookings/${tripId}`);
+            const { data } = await axiosClient.post(`/bookings/${tripId}`, {
+                destLat: destLat ?? undefined,
+                destLng: destLng ?? undefined,
+            });
             setTrips(prev =>
                 prev.map(t => t.id === tripId ? { ...t, availableSeats: Math.max(0, t.availableSeats - 1) } : t)
             );
@@ -738,13 +762,25 @@ export const HomeScreen = () => {
                                             {trip.matchType && (
                                                 <View style={[
                                                     styles.tripCardBadge,
-                                                    { backgroundColor: trip.matchType === 'exact' ? '#DCFCE7' : '#FEF9C3' },
+                                                    {
+                                                        backgroundColor:
+                                                            trip.matchType === 'exact' ? '#DCFCE7' :
+                                                            trip.matchType === 'detour' ? '#FFF7ED' :
+                                                            '#FEF9C3',
+                                                    },
                                                 ]}>
                                                     <Text style={[
                                                         styles.tripCardBadgeText,
-                                                        { color: trip.matchType === 'exact' ? '#10B981' : '#F59E0B' },
+                                                        {
+                                                            color:
+                                                                trip.matchType === 'exact' ? '#10B981' :
+                                                                trip.matchType === 'detour' ? '#F97316' :
+                                                                '#F59E0B',
+                                                        },
                                                     ]}>
-                                                        {trip.matchType === 'exact' ? 'Te deja ahí' : 'Pasa cerca'}
+                                                        {trip.matchType === 'exact' ? 'Te deja ahí' :
+                                                         trip.matchType === 'detour' ? `Se desvía ~${trip.detourMinutes}min` :
+                                                         'Pasa cerca'}
                                                     </Text>
                                                 </View>
                                             )}
