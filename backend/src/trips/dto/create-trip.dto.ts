@@ -1,25 +1,49 @@
 import {
     IsBoolean, IsDateString, IsNotEmpty, IsArray, ArrayMinSize,
     IsOptional, IsString, IsNumber, IsInt, IsJSON, Min, Max, MaxLength,
-    IsLatitude, IsLongitude, ValidateNested,
+    registerDecorator, ValidationOptions,
 } from 'class-validator';
-import { Type } from 'class-transformer';
 
-// M-1: each route element is validated as a proper [lat, lng] pair
-class RoutePointDto {
-    @IsLatitude()
-    0: number; // latitude
-
-    @IsLongitude()
-    1: number; // longitude
+/**
+ * M-1: Custom validator for [lat, lng][] tuples.
+ *
+ * @ValidateNested + @Type(() => RoutePointDto) does NOT work for plain number
+ * tuples — class-transformer cannot map [number, number] onto a class with
+ * numeric index keys, so it fires "must be either object or array" for every
+ * point in the route. A single inline validator avoids the issue entirely.
+ */
+function IsRoutePointArray(options?: ValidationOptions) {
+    return (object: object, propertyName: string) => {
+        registerDecorator({
+            name: 'isRoutePointArray',
+            target: (object as any).constructor,
+            propertyName,
+            options: {
+                message: 'Cada punto de ruta debe ser un par [latitud, longitud] con rangos válidos (lat −90…90, lng −180…180)',
+                ...options,
+            },
+            validator: {
+                validate(value: unknown) {
+                    if (!Array.isArray(value)) return false;
+                    return value.every(
+                        (point) =>
+                            Array.isArray(point) &&
+                            point.length === 2 &&
+                            typeof point[0] === 'number' &&
+                            typeof point[1] === 'number' &&
+                            point[0] >= -90 && point[0] <= 90 &&
+                            point[1] >= -180 && point[1] <= 180,
+                    );
+                },
+            },
+        });
+    };
 }
 
 export class CreateTripDto {
-    // M-1: ValidateNested ensures each [lat, lng] tuple has valid coordinate ranges
     @IsArray()
     @ArrayMinSize(2)
-    @ValidateNested({ each: true })
-    @Type(() => RoutePointDto)
+    @IsRoutePointArray()
     route: [number, number][];
 
     @IsDateString()
@@ -52,8 +76,8 @@ export class CreateTripDto {
     @IsOptional()
     pricePerSeat?: number;
 
-    // M-2: @IsJSON() ensures the stored meetingPoint can always be parsed — rejects
-    // plain strings like "hello" that would silently corrupt downstream GeoJSON parsing
+    // M-2: ensures the stored meetingPoint is always parseable JSON —
+    // rejects plain strings that would silently corrupt downstream GeoJSON parsing
     @IsJSON()
     @MaxLength(500)
     meetingPoint: string;
