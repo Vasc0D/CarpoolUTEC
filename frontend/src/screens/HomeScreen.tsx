@@ -43,6 +43,8 @@ interface ActiveBooking {
     tripId: string;
     status: 'PENDING' | 'ACCEPTED';
     departureTime?: string;
+    destLat?: number;
+    destLng?: number;
     driver?: {
         name: string;
         vehicle?: { brand: string; model: string; color: string; plate: string } | null;
@@ -342,6 +344,8 @@ export const HomeScreen = () => {
                 status: active.status,
                 departureTime: active.trip.departureTime,
                 driver: active.trip.driver,
+                destLat: active.destLat ?? undefined,
+                destLng: active.destLng ?? undefined,
             } : null);
         } catch {
             // silent
@@ -516,6 +520,19 @@ export const HomeScreen = () => {
         return () => { clearInterval(id); setNoShowCountdown(null); };
     }, [appMode, myActiveBooking?.id, myActiveBooking?.status, myActiveBooking?.departureTime]);
 
+    // Restore route to dropoff whenever active booking changes (e.g. after reload)
+    useEffect(() => {
+        if (!myActiveBooking?.tripId || myActiveBooking.destLat == null || myActiveBooking.destLng == null) return;
+        // Only fetch if we don't already have a route painted
+        if (routeToDropoff.length > 0) return;
+        axiosClient.get(`/trips/${myActiveBooking.tripId}/closest-point`, {
+            params: { destLat: myActiveBooking.destLat, destLng: myActiveBooking.destLng },
+        }).then(({ data }) => {
+            setDropoffPoint({ latitude: data.latitude, longitude: data.longitude });
+            setRouteToDropoff(data.routeToDropoff ?? []);
+        }).catch(() => {});
+    }, [myActiveBooking?.id]);
+
     useEffect(() => {
         if (appMode !== 'driver' || !activeDriverTrip?.routePolyline?.coordinates?.length) return;
         const coords = activeDriverTrip.routePolyline.coordinates.map(c => ({
@@ -636,7 +653,14 @@ export const HomeScreen = () => {
         });
 
         socket.on('noShowUpdated', (data: { bookingId: string }) => {
-            setMyActiveBooking(prev => (prev?.id === data.bookingId ? null : prev));
+            setMyActiveBooking(prev => {
+                if (prev?.id === data.bookingId) {
+                    setDropoffPoint(null);
+                    setRouteToDropoff([]);
+                    return null;
+                }
+                return prev;
+            });
             Alert.alert(
                 'Reserva cancelada',
                 'No confirmaste tu subida al auto a tiempo. Tu reserva fue cancelada automáticamente.',
@@ -666,6 +690,8 @@ export const HomeScreen = () => {
                 tripId,
                 status: data.status === 'ACCEPTED' ? 'ACCEPTED' : 'PENDING',
                 departureTime: bookedTrip?.departureTime,
+                destLat: destLat ?? undefined,
+                destLng: destLng ?? undefined,
                 driver: bookedTrip?.driver ? {
                     name: bookedTrip.driver.name,
                     vehicle: bookedTrip.driver.vehicle ?? null,
@@ -702,6 +728,8 @@ export const HomeScreen = () => {
         try {
             await axiosClient.patch(`/bookings/${bookingId}/cancel`);
             setMyActiveBooking(null);
+            setDropoffPoint(null);
+            setRouteToDropoff([]);
             if (selectedTrip) {
                 setTrips(prev =>
                     prev.map(t => t.id === selectedTrip.id ? { ...t, availableSeats: t.availableSeats + 1 } : t)
@@ -1488,7 +1516,7 @@ export const HomeScreen = () => {
                                         })}
 
                                         {/* Iniciar / Finalizar */}
-                                        {minutesLate >= 0 && !canStart && acceptedBookings.length > 0 && (
+                                        {activeDriverTrip.status === 'SCHEDULED' && minutesLate >= 0 && !canStart && acceptedBookings.length > 0 && (
                                             <View style={styles.waitingBoardingRow}>
                                                 <Ionicons name="time-outline" size={15} color="#F59E0B" />
                                                 <Text style={styles.waitingBoardingText}>
