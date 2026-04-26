@@ -982,6 +982,7 @@ export const HomeScreen = () => {
                             ref={destInputRef}
                             placeholder="¿A dónde vas?"
                             onPress={(_data, details = null) => {
+                                if (myActiveBooking) return;
                                 if (details) {
                                     const lat = details.geometry.location.lat;
                                     const lng = details.geometry.location.lng;
@@ -992,8 +993,12 @@ export const HomeScreen = () => {
                             }}
                             query={{ key: GOOGLE_MAPS_KEY, language: 'es' }}
                             fetchDetails={true}
+                            textInputProps={{
+                                editable: !myActiveBooking,
+                                selectTextOnFocus: !myActiveBooking,
+                            }}
                             styles={{
-                                textInput: styles.destInput,
+                                textInput: [styles.destInput, myActiveBooking ? styles.destInputLocked : undefined],
                                 listView: {
                                     position: 'absolute', top: 48, zIndex: 100,
                                     borderRadius: 12, backgroundColor: '#FFF', elevation: 8,
@@ -1001,7 +1006,7 @@ export const HomeScreen = () => {
                             }}
                             keyboardShouldPersistTaps="handled"
                         />
-                        {destLat !== null && (
+                        {destLat !== null && !myActiveBooking && (
                             <TouchableOpacity style={styles.destClearBtn} onPress={handleClearDest}>
                                 <Ionicons name="close-circle" size={20} color="#64748B" />
                             </TouchableOpacity>
@@ -1661,6 +1666,7 @@ const styles = StyleSheet.create({
         shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.1, shadowRadius: 6, elevation: 4,
     },
+    destInputLocked: { color: '#94A3B8', backgroundColor: '#F8FAFC' },
     destClearBtn: { position: 'absolute', right: 12, top: 12, zIndex: 21 },
 
     // Bottom panel
