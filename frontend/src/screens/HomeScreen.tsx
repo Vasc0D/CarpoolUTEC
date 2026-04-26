@@ -307,6 +307,8 @@ export const HomeScreen = () => {
     const [confirmingBoarding, setConfirmingBoarding] = useState(false);
     const [boardedTripId, setBoardedTripId] = useState<string | null>(null);
 
+    const [noShowCountdown, setNoShowCountdown] = useState<number | null>(null);
+
     const [activeDriverTrip, setActiveDriverTrip] = useState<DriverTripSummary | null>(null);
     const [cancelingDriverTrip, setCancelingDriverTrip] = useState(false);
     const [startingDriverTrip, setStartingDriverTrip] = useState(false);
@@ -493,6 +495,27 @@ export const HomeScreen = () => {
         return () => clearInterval(id);
     }, [appMode, myActiveBooking?.id]);
 
+    // 1-second countdown for passenger no-show window (departure → +5 min)
+    useEffect(() => {
+        if (appMode !== 'passenger' || !myActiveBooking?.departureTime || myActiveBooking.status !== 'ACCEPTED') {
+            setNoShowCountdown(null);
+            return;
+        }
+        const departureMs = new Date(myActiveBooking.departureTime).getTime();
+        const deadlineMs  = departureMs + 5 * 60 * 1000;
+        const update = () => {
+            const remaining = Math.ceil((deadlineMs - Date.now()) / 1000);
+            if (remaining > 0 && Date.now() >= departureMs) {
+                setNoShowCountdown(remaining);
+            } else {
+                setNoShowCountdown(null);
+            }
+        };
+        update();
+        const id = setInterval(update, 1_000);
+        return () => { clearInterval(id); setNoShowCountdown(null); };
+    }, [appMode, myActiveBooking?.id, myActiveBooking?.status, myActiveBooking?.departureTime]);
+
     useEffect(() => {
         if (appMode !== 'driver' || !activeDriverTrip?.routePolyline?.coordinates?.length) return;
         const coords = activeDriverTrip.routePolyline.coordinates.map(c => ({
@@ -610,6 +633,14 @@ export const HomeScreen = () => {
         socket.on('trip_published', () => {
             fetchStopsCoverage();
             fetchTrips();
+        });
+
+        socket.on('noShowUpdated', (data: { bookingId: string }) => {
+            setMyActiveBooking(prev => (prev?.id === data.bookingId ? null : prev));
+            Alert.alert(
+                'Reserva cancelada',
+                'No confirmaste tu subida al auto a tiempo. Tu reserva fue cancelada automáticamente.',
+            );
         });
 
         return () => { socket.disconnect(); socketRef.current = null; };
@@ -1023,20 +1054,31 @@ export const HomeScreen = () => {
                              tick >= 0 &&
                              new Date() >= new Date(myActiveBooking.departureTime) &&
                              boardedTripId !== myActiveBooking.tripId && (
-                                <TouchableOpacity
-                                    style={styles.bookedBoardBtn}
-                                    onPress={handleConfirmBoarding}
-                                    disabled={confirmingBoarding}
-                                    activeOpacity={0.85}
-                                >
-                                    {confirmingBoarding
-                                        ? <ActivityIndicator color="#FFF" />
-                                        : <>
-                                            <Ionicons name="car-outline" size={18} color="#FFF" />
-                                            <Text style={styles.bookedBoardBtnText}>Confirmar subida al auto</Text>
-                                          </>
-                                    }
-                                </TouchableOpacity>
+                                <View style={{ gap: 8 }}>
+                                    {/* Countdown warning */}
+                                    {noShowCountdown !== null && (
+                                        <View style={styles.noShowCountdownRow}>
+                                            <Ionicons name="warning-outline" size={15} color="#DC2626" />
+                                            <Text style={styles.noShowCountdownText}>
+                                                {`${Math.floor(noShowCountdown / 60)}:${String(noShowCountdown % 60).padStart(2, '0')} para confirmar tu subida o se cancelará tu reserva`}
+                                            </Text>
+                                        </View>
+                                    )}
+                                    <TouchableOpacity
+                                        style={styles.bookedBoardBtn}
+                                        onPress={handleConfirmBoarding}
+                                        disabled={confirmingBoarding}
+                                        activeOpacity={0.85}
+                                    >
+                                        {confirmingBoarding
+                                            ? <ActivityIndicator color="#FFF" />
+                                            : <>
+                                                <Ionicons name="car-outline" size={18} color="#FFF" />
+                                                <Text style={styles.bookedBoardBtnText}>Confirmar subida al auto</Text>
+                                              </>
+                                        }
+                                    </TouchableOpacity>
+                                </View>
                             )}
 
                             {/* Cancel booking */}
@@ -1418,7 +1460,7 @@ export const HomeScreen = () => {
                                                                 <Text style={[styles.driverTripPassengerBadgeText, {
                                                                     color: b.isBoarded ? '#2563EB' : '#B45309',
                                                                 }]}>
-                                                                    {b.isBoarded ? '✓ A bordo' : '⏳ Sin subir'}
+                                                                    {b.isBoarded ? '✓ A bordo' : ' Sin subir'}
                                                                 </Text>
                                                             </View>
                                                         </View>
@@ -1999,6 +2041,24 @@ const styles = StyleSheet.create({
         paddingHorizontal: 4,
     },
     bookedTimeText: { fontSize: 13, color: '#64748B', fontWeight: '600' },
+    noShowCountdownRow: {
+        flexDirection: 'row' as const,
+        alignItems: 'center' as const,
+        gap: 6,
+        backgroundColor: '#FEF2F2',
+        borderRadius: 10,
+        paddingVertical: 8,
+        paddingHorizontal: 12,
+        borderWidth: 1,
+        borderColor: '#FECACA',
+    },
+    noShowCountdownText: {
+        flex: 1,
+        fontSize: 12,
+        fontWeight: '700' as const,
+        color: '#DC2626',
+        lineHeight: 16,
+    },
     bookedBoardBtn: {
         flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
         backgroundColor: '#8B5CF6', paddingVertical: 14, borderRadius: 14,

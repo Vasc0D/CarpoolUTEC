@@ -281,6 +281,31 @@ export class TripsService {
     }
   }
 
+  @Cron('* * * * *')
+  async autoRemoveNoShows(): Promise<void> {
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+    const trips = await this.tripsRepository.find({
+      where: { status: TripStatus.SCHEDULED, departureTime: LessThan(fiveMinutesAgo) },
+      relations: ['bookings', 'bookings.passenger', 'driver'],
+    });
+
+    for (const trip of trips) {
+      const noShows = trip.bookings.filter(
+        b => b.status === BookingStatus.ACCEPTED && !b.isBoarded,
+      );
+      for (const booking of noShows) {
+        booking.status = BookingStatus.CANCELED;
+        await this.bookingsRepository.save(booking);
+        this.notificationsService.notifyPassengerNoShow(booking.passenger.id, { bookingId: booking.id });
+        this.notificationsService.notifyDriverBookingCanceled(trip.driver.id, {
+          bookingId: booking.id,
+          tripId: trip.id,
+          passengerName: booking.passenger.name,
+        });
+      }
+    }
+  }
+
   async getClosestPoint(
     tripId: string,
     destLat: number,
