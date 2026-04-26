@@ -605,7 +605,17 @@ export const HomeScreen = () => {
             setSelectedTrip(prev =>
                 prev?.id === tripId ? { ...prev, availableSeats: Math.max(0, prev.availableSeats - 1) } : prev
             );
-            setMyActiveBooking({ id: data.id, tripId, status: data.status === 'ACCEPTED' ? 'ACCEPTED' : 'PENDING' });
+            const bookedTrip = trips.find(t => t.id === tripId);
+            setMyActiveBooking({
+                id: data.id,
+                tripId,
+                status: data.status === 'ACCEPTED' ? 'ACCEPTED' : 'PENDING',
+                departureTime: bookedTrip?.departureTime,
+                driver: bookedTrip?.driver ? {
+                    name: bookedTrip.driver.name,
+                    vehicle: bookedTrip.driver.vehicle ?? null,
+                } : undefined,
+            });
             setBookedTripId(tripId);
         } catch (error: any) {
             const msg = error.response?.data?.message || 'No se pudo solicitar el asiento. Intenta de nuevo.';
