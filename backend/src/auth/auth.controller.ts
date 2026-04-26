@@ -1,28 +1,45 @@
-import { Controller, Get, Req, Res, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Req, Res, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { ConfigService } from '@nestjs/config';
+import { IsString, IsNotEmpty } from 'class-validator';
 import { AuthService } from './auth.service';
 import type { Response } from 'express';
 
+class ExchangeCodeDto {
+    @IsString()
+    @IsNotEmpty()
+    code: string;
+}
+
 @Controller('auth')
 export class AuthController {
-    constructor(private readonly authService: AuthService) { }
+    constructor(
+        private readonly authService: AuthService,
+        private readonly configService: ConfigService,
+    ) {}
 
     @Get('google')
     @UseGuards(AuthGuard('google'))
-    async googleAuth(@Req() req) {
-        // Inicia el flujo de OAuth 2.0. Redirige automáticamente a Google.
+    googleAuth() {
+        // Passport redirects to Google automatically — no body needed
     }
 
     @Get('google/callback')
     @UseGuards(AuthGuard('google'))
     async googleAuthRedirect(@Req() req, @Res() res: Response) {
-        // Validamos la sesión y firmamos nuestro JWT interno
-        const jwt = await this.authService.googleLogin(req);
+        const { code } = await this.authService.googleLogin(req);
 
-        // Disparamos un Deep Link puro hacia Expo usando el IP local de la maquina host que sirve la bundler
-        // Si compilan la app en la nube o local (distinta subred), asegurense de cambiar esta IP
-        const redirectUrl = `exp://127.0.0.1:8081/--/login?token=${jwt.access_token}&user=${encodeURIComponent(JSON.stringify(jwt.user))}`;
+        // Only the opaque short-lived code goes in the URL — never the JWT itself
+        const baseUrl = this.configService.getOrThrow<string>('EXPO_REDIRECT_URL');
+        return res.redirect(`${baseUrl}?code=${code}`);
+    }
 
-        return res.redirect(redirectUrl);
+    /**
+     * Mobile app calls this with the code received in the deep-link.
+     * Returns the JWT. Must be called within 60 seconds of the redirect.
+     */
+    @Post('token')
+    exchangeCode(@Body() dto: ExchangeCodeDto) {
+        return this.authService.exchangeCode(dto.code);
     }
 }

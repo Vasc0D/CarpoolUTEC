@@ -1,10 +1,10 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ScheduleModule } from '@nestjs/schedule';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
 import { UsersModule } from './users/users.module';
 import { TripsModule } from './trips/trips.module';
 import { NotificationsModule } from './notifications/notifications.module';
@@ -14,13 +14,12 @@ import { AuthModule } from './auth/auth.module';
 
 @Module({
   imports: [
-    // 1. Carga las variables de entorno desde el archivo .env
-    ConfigModule.forRoot({
-      isGlobal: true, // Permite usar ConfigService en cualquier módulo sin importarlo de nuevo
-    }),
+    ConfigModule.forRoot({ isGlobal: true }),
     ScheduleModule.forRoot(),
-    
-    // 2. Configura la conexión a PostgreSQL
+
+    // Rate limiting: max 60 requests per minute per IP globally
+    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 60 }]),
+
     TypeOrmModule.forRoot({
       type: 'postgres',
       host: process.env.DB_HOST,
@@ -28,11 +27,11 @@ import { AuthModule } from './auth/auth.module';
       username: process.env.DB_USER,
       password: process.env.DB_PASSWORD,
       database: process.env.DB_NAME,
-      autoLoadEntities: true,      // Escanea y carga los archivos .entity.ts automáticamente
-      synchronize: true,           // Sincroniza el esquema de DB (solo para desarrollo, apagar en prod)
+      autoLoadEntities: true,
+      // Only auto-sync schema in development; never in production
+      synchronize: process.env.NODE_ENV !== 'production',
     }),
 
-    // 3. Tus módulos de la arquitectura
     UsersModule,
     TripsModule,
     NotificationsModule,
@@ -40,7 +39,9 @@ import { AuthModule } from './auth/auth.module';
     BookingsModule,
     AuthModule,
   ],
-  controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    // Apply rate limiting globally via DI (works with guards that need injected services)
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+  ],
 })
 export class AppModule {}

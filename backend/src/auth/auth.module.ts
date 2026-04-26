@@ -11,14 +11,15 @@ import { UsersModule } from '../users/users.module';
 @Module({
   imports: [
     UsersModule,
+    ConfigModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: async (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET') || 'super-secret',
+      useFactory: (configService: ConfigService) => ({
+        secret: configService.getOrThrow<string>('JWT_SECRET'),
         signOptions: {
-          expiresIn: (configService.get<string>('JWT_EXPIRATION') || '7d') as any,
+          expiresIn: configService.get('JWT_EXPIRATION', '7d') as any,
         },
       }),
     }),
@@ -26,4 +27,4 @@ import { UsersModule } from '../users/users.module';
   controllers: [AuthController],
   providers: [AuthService, GoogleStrategy, JwtStrategy],
 })
-export class AuthModule { }
+export class AuthModule {}

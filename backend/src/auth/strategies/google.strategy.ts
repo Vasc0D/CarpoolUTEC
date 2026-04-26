@@ -7,27 +7,22 @@ import { ConfigService } from '@nestjs/config';
 export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
     constructor(private readonly configService: ConfigService) {
         super({
-            clientID: configService.get<string>('GOOGLE_CLIENT_ID') || 'test-client-id', // Asegúrate de agregarlo en .env
-            clientSecret: configService.get<string>('GOOGLE_CLIENT_SECRET') || 'test-secret',
-            callbackURL: configService.get<string>('GOOGLE_CALLBACK_URL') || 'http://localhost:3000/auth/google/callback',
+            clientID: configService.getOrThrow<string>('GOOGLE_CLIENT_ID'),
+            clientSecret: configService.getOrThrow<string>('GOOGLE_CLIENT_SECRET'),
+            callbackURL: configService.getOrThrow<string>('GOOGLE_CALLBACK_URL'),
             scope: ['email', 'profile'],
         });
     }
 
-    async validate(accessToken: string, refreshToken: string, profile: any, done: VerifyCallback): Promise<any> {
+    async validate(_accessToken: string, _refreshToken: string, profile: any, done: VerifyCallback): Promise<any> {
         const { emails, displayName } = profile;
-        const email = emails[0].value;
+        const email: string = emails[0].value;
 
-        // Filtro Crítico: Restringir a dominio universitario
         if (!email.endsWith('@utec.edu.pe')) {
             throw new UnauthorizedException('Solo se permiten cuentas institucionales @utec.edu.pe');
         }
 
-        const user = {
-            email,
-            name: displayName,
-            accessToken,
-        };
-        done(null, user);
+        // Only pass what we need — never forward OAuth tokens further into the app
+        done(null, { email, name: displayName });
     }
 }

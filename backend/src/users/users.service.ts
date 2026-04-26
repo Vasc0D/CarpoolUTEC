@@ -12,7 +12,7 @@ export class UsersService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(Vehicle)
     private readonly vehicleRepository: Repository<Vehicle>,
-  ) { }
+  ) {}
 
   async findByEmail(email: string): Promise<User | null> {
     return this.userRepository.findOne({ where: { email } });
@@ -21,7 +21,7 @@ export class UsersService {
   async findByIdWithVehicle(id: string): Promise<User | null> {
     return this.userRepository.findOne({
       where: { id },
-      relations: ['vehicle']
+      relations: ['vehicle'],
     });
   }
 
@@ -29,27 +29,40 @@ export class UsersService {
     return this.userRepository.findOne({ where: { id } });
   }
 
-  async create(userObj: Partial<User>): Promise<User> {
-    const user = this.userRepository.create(userObj);
+  async create(data: Pick<User, 'email' | 'name'>): Promise<User> {
+    const user = this.userRepository.create(data);
     return this.userRepository.save(user);
+  }
+
+  /**
+   * Returns a safe profile projection — only the fields the client legitimately needs.
+   * Does NOT include relation arrays (trips, bookings) that could trigger N+1 loads.
+   */
+  async getProfile(id: string): Promise<{ id: string; name: string; email: string; phone: string | null; vehicle: Vehicle | null }> {
+    const user = await this.userRepository.findOne({
+      where: { id },
+      relations: ['vehicle'],
+    });
+    if (!user) throw new NotFoundException('Usuario no encontrado');
+    return {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      phone: user.phone ?? null,
+      vehicle: user.vehicle ?? null,
+    };
   }
 
   async createVehicle(userId: string, createVehicleDto: CreateVehicleDto): Promise<Vehicle> {
     const user = await this.findByIdWithVehicle(userId);
-    if (!user) {
-      throw new NotFoundException('Usuario no encontrado');
-    }
+    if (!user) throw new NotFoundException('Usuario no encontrado');
 
     if (user.vehicle) {
-      // Si ya tiene vehículo, lo eliminamos para asignar el nuevo (por simplicidad One-to-One)
+      // Replace existing vehicle (one-to-one relationship)
       await this.vehicleRepository.delete(user.vehicle.id);
     }
 
-    const vehicle = this.vehicleRepository.create({
-      ...createVehicleDto,
-      user,
-    });
-
+    const vehicle = this.vehicleRepository.create({ ...createVehicleDto, user });
     return this.vehicleRepository.save(vehicle);
   }
 }

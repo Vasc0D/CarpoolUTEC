@@ -1,29 +1,52 @@
 import React, { useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
 import { useAuthStore } from '../store/authStore';
+import { axiosClient } from '../api/axiosClient';
 
-// Mantiene en tracking la sesión si la app es enviada a background
+// Required by Expo AuthSession to close the browser tab after redirect
 WebBrowser.maybeCompleteAuthSession();
+
+const BACKEND_URL = 'http://localhost:3000';
 
 export const LoginScreen = () => {
     const login = useAuthStore((state) => state.login);
 
+    // Exchange a one-time auth code for a JWT, then fetch the user profile.
+    // The code arrives via the deep-link URL (?code=...) and is only valid for 60 s.
+    const handleAuthCode = async (code: string) => {
+        try {
+            // 1. Exchange the opaque code for the JWT
+            const { data: tokenData } = await axiosClient.post<{ access_token: string }>(
+                '/auth/token',
+                { code },
+            );
+            const token = tokenData.access_token;
+
+            // 2. Fetch the user profile using the new token
+            const { data: user } = await axiosClient.get('/users/me', {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+
+            // 3. Persist session — AppNavigator will react and navigate to Home
+            login(token, user, !!user.vehicle);
+        } catch {
+            Alert.alert('Error', 'No se pudo completar el inicio de sesión. Intenta de nuevo.');
+        }
+    };
+
     useEffect(() => {
         const handleUrl = (event: Linking.EventType) => {
-            const data = Linking.parse(event.url);
-            if (data.queryParams?.token && data.queryParams?.user) {
-                const user = JSON.parse(decodeURIComponent(data.queryParams.user as string));
-                // Persistir sesión — AppNavigator reacciona al token y navega a Home automáticamente
-                login(data.queryParams.token as string, user);
-            }
+            const { queryParams } = Linking.parse(event.url);
+            const code = queryParams?.code as string | undefined;
+            if (code) handleAuthCode(code);
         };
 
-        // Capturar deep links cuando la app ya corre silente en memoria (background event)
+        // Handle deep links when the app is already in memory (background)
         const subscription = Linking.addEventListener('url', handleUrl);
 
-        // Capturar deep links desde cero o cold start
+        // Handle deep links on cold start
         Linking.getInitialURL().then((url) => {
             if (url) handleUrl({ url });
         });
@@ -32,9 +55,7 @@ export const LoginScreen = () => {
     }, []);
 
     const handleLogin = async () => {
-        const authUrl = `http://localhost:3000/auth/google`; // Backend OAuth2 Tunnel
-        // Redirigir abriendo una pestaña oficial delegando la intercepción al Backend Res.redirect via App DeepLink  
-        await WebBrowser.openBrowserAsync(authUrl);
+        await WebBrowser.openBrowserAsync(`${BACKEND_URL}/auth/google`);
     };
 
     return (
@@ -54,13 +75,13 @@ const styles = StyleSheet.create({
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
-        backgroundColor: '#0F172A', // Slate-900 Modern
+        backgroundColor: '#0F172A',
         paddingHorizontal: 24,
     },
     title: {
         fontSize: 48,
         fontWeight: '900',
-        color: '#0EA5E9', // React/Sky-blue shade
+        color: '#0EA5E9',
         marginBottom: 8,
     },
     subtitle: {

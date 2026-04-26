@@ -5,12 +5,13 @@ import { CreateVehicleDto } from '../vehicles/dto/create-vehicle.dto';
 
 @Controller('users')
 export class UsersController {
-  constructor(private readonly usersService: UsersService) { }
+  constructor(private readonly usersService: UsersService) {}
 
   @Get('me')
   @UseGuards(AuthGuard('jwt'))
   getMe(@Req() req) {
-    return this.usersService.findByIdWithVehicle(req.user.id);
+    // Returns only a safe projection — not the raw ORM entity
+    return this.usersService.getProfile(req.user.id);
   }
 
   @Post('vehicle')
