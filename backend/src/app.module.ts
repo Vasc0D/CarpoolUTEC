@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
@@ -20,16 +20,21 @@ import { AuthModule } from './auth/auth.module';
     // Rate limiting: max 60 requests per minute per IP globally
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 60 }]),
 
-    TypeOrmModule.forRoot({
-      type: 'postgres',
-      host: process.env.DB_HOST,
-      port: parseInt(process.env.DB_PORT || '5432', 10),
-      username: process.env.DB_USER,
-      password: process.env.DB_PASSWORD,
-      database: process.env.DB_NAME,
-      autoLoadEntities: true,
-      // Only auto-sync schema in development; never in production
-      synchronize: process.env.NODE_ENV !== 'production',
+    // C-1: forRootAsync lets ConfigService.getOrThrow validate every DB param at
+    // startup — missing vars throw a clear error instead of a silent TypeORM failure
+    TypeOrmModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        type: 'postgres',
+        host: config.getOrThrow<string>('DB_HOST'),
+        port: config.getOrThrow<number>('DB_PORT'),
+        username: config.getOrThrow<string>('DB_USER'),
+        password: config.getOrThrow<string>('DB_PASSWORD'),
+        database: config.getOrThrow<string>('DB_NAME'),
+        autoLoadEntities: true,
+        // Only auto-sync schema in development; never in production
+        synchronize: config.get<string>('NODE_ENV') !== 'production',
+      }),
     }),
 
     UsersModule,

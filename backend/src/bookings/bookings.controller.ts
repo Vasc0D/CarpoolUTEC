@@ -1,4 +1,4 @@
-import { Controller, Post, Patch, Get, Param, UseGuards, Req, Body, Query, DefaultValuePipe, ParseIntPipe } from '@nestjs/common';
+import { Controller, Post, Patch, Get, Param, UseGuards, Req, Body, Query, DefaultValuePipe, ParseIntPipe, ParseUUIDPipe } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { BookingsService } from './bookings.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
@@ -8,9 +8,10 @@ import { CreateBookingDto } from './dto/create-booking.dto';
 export class BookingsController {
   constructor(private readonly bookingsService: BookingsService) {}
 
+  // C-2: ParseUUIDPipe rejects non-UUID strings with a 400 before hitting the DB
   @Post(':tripId')
   solicitSeat(
-    @Param('tripId') tripId: string,
+    @Param('tripId', ParseUUIDPipe) tripId: string,
     @Req() req,
     @Body() dto: CreateBookingDto,
   ) {
@@ -18,27 +19,27 @@ export class BookingsController {
   }
 
   @Patch(':bookingId/accept')
-  acceptBooking(@Param('bookingId') bookingId: string, @Req() req) {
+  acceptBooking(@Param('bookingId', ParseUUIDPipe) bookingId: string, @Req() req) {
     return this.bookingsService.acceptBooking(bookingId, req.user.id);
   }
 
   @Patch(':bookingId/reject')
-  rejectBooking(@Param('bookingId') bookingId: string, @Req() req) {
+  rejectBooking(@Param('bookingId', ParseUUIDPipe) bookingId: string, @Req() req) {
     return this.bookingsService.rejectBooking(bookingId, req.user.id);
   }
 
   @Patch(':bookingId/cancel')
-  cancelBooking(@Param('bookingId') bookingId: string, @Req() req) {
+  cancelBooking(@Param('bookingId', ParseUUIDPipe) bookingId: string, @Req() req) {
     return this.bookingsService.cancelBooking(bookingId, req.user.id);
   }
 
   @Patch(':bookingId/board')
-  confirmBoarding(@Param('bookingId') bookingId: string, @Req() req) {
+  confirmBoarding(@Param('bookingId', ParseUUIDPipe) bookingId: string, @Req() req) {
     return this.bookingsService.confirmBoarding(bookingId, req.user.id);
   }
 
   @Patch(':bookingId/no-show')
-  markNoShow(@Param('bookingId') bookingId: string, @Req() req) {
+  markNoShow(@Param('bookingId', ParseUUIDPipe) bookingId: string, @Req() req) {
     return this.bookingsService.markNoShow(bookingId, req.user.id);
   }
 

@@ -374,8 +374,9 @@ export const HomeScreen = () => {
                 params: { lat: latitude, lng: longitude, destLat: eLat, destLng: eLng },
             });
             setTrips(data ?? []);
-        } catch (error: any) {
-            console.error('Error fetching trips:', error.response?.data || error.message);
+        } catch {
+            // M-3: removed console.error — the 401 interceptor handles token expiry;
+            // other errors are surfaced via the empty-state / retry UI
         } finally {
             setLoadingTrips(false);
         }

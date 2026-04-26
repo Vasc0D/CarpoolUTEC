@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Patch, Param, Body, UseGuards, Req, Query, BadRequestException, ParseIntPipe, DefaultValuePipe } from '@nestjs/common';
+import { Controller, Post, Get, Patch, Param, Body, UseGuards, Req, Query, BadRequestException, ParseIntPipe, ParseUUIDPipe, DefaultValuePipe } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { TripsService } from './trips.service';
 import { CreateTripDto } from './dto/create-trip.dto';
@@ -82,7 +82,7 @@ export class TripsController {
 
   @Get(':tripId/closest-point')
   getClosestPoint(
-    @Param('tripId') tripId: string,
+    @Param('tripId', ParseUUIDPipe) tripId: string,
     @Query('destLat') destLat: string,
     @Query('destLng') destLng: string,
   ) {
@@ -95,23 +95,24 @@ export class TripsController {
     return this.tripsService.getClosestPoint(tripId, lat, lng);
   }
 
+  // C-2: ParseUUIDPipe rejects non-UUID strings with a 400 before hitting the DB
   @Get(':tripId')
-  findOne(@Param('tripId') tripId: string) {
+  findOne(@Param('tripId', ParseUUIDPipe) tripId: string) {
     return this.tripsService.findOne(tripId);
   }
 
   @Patch(':tripId/cancel')
-  cancelTrip(@Param('tripId') tripId: string, @Req() req) {
+  cancelTrip(@Param('tripId', ParseUUIDPipe) tripId: string, @Req() req) {
     return this.tripsService.cancelTrip(tripId, req.user.id);
   }
 
   @Patch(':tripId/start')
-  startTrip(@Param('tripId') tripId: string, @Req() req) {
+  startTrip(@Param('tripId', ParseUUIDPipe) tripId: string, @Req() req) {
     return this.tripsService.startTrip(tripId, req.user.id);
   }
 
   @Patch(':tripId/finish')
-  finishTrip(@Param('tripId') tripId: string, @Req() req) {
+  finishTrip(@Param('tripId', ParseUUIDPipe) tripId: string, @Req() req) {
     return this.tripsService.finishTrip(tripId, req.user.id);
   }
 }
