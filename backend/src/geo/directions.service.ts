@@ -1,9 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class DirectionsService {
   private readonly logger = new Logger(DirectionsService.name);
-  private readonly apiKey = process.env.GOOGLE_MAPS_KEY;
+  // A-5: use ConfigService.getOrThrow so the app refuses to start if the key is absent
+  private readonly apiKey: string;
+
+  constructor(private readonly configService: ConfigService) {
+    this.apiKey = this.configService.getOrThrow<string>('GOOGLE_MAPS_KEY');
+  }
 
   async getRoute(waypoints: { lat: number; lng: number }[]): Promise<{
     polylinePoints: [number, number][];
@@ -21,7 +27,7 @@ export class DirectionsService {
     const params = new URLSearchParams({
       origin,
       destination,
-      key: this.apiKey ?? '',
+      key: this.apiKey,
       language: 'es',
       mode: 'driving',
     });

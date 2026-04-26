@@ -1,4 +1,4 @@
-import { Column, CreateDateColumn, Entity, ManyToOne, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
+import { Column, CreateDateColumn, Entity, Index, ManyToOne, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
 import { Trip } from '../../trips/entities/trip.entity';
 import { User } from '../../users/entities/user.entity';
 
@@ -21,6 +21,8 @@ export class Booking {
     @ManyToOne(() => User, user => user.bookings)
     passenger: User;
 
+    // B-1: index for frequent status-filtered lookups (active booking checks, cron jobs)
+    @Index()
     @Column({
         type: 'enum',
         enum: BookingStatus,

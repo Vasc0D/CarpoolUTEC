@@ -1,4 +1,7 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException, ConflictException, ForbiddenException,
+  Injectable, Logger, NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, In, LessThan, Repository } from 'typeorm';
 import { Cron } from '@nestjs/schedule';
@@ -9,6 +12,13 @@ import { Booking, BookingStatus } from '../bookings/entities/booking.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { GeoService } from '../geo/geo.service';
 import { DirectionsService } from '../geo/directions.service';
+
+// C-1: typed search result — replaces the previous Promise<any[]> return type
+export type TripSearchResult = Trip & {
+  matchType: 'exact' | 'near' | 'detour';
+  distanceToDestination?: number;
+  detourMinutes?: number;
+};
 
 @Injectable()
 export class TripsService {
@@ -91,7 +101,15 @@ export class TripsService {
     return saved;
   }
 
-  async findAvailableTrips(lat: number, lng: number, destLat?: number, destLng?: number): Promise<any[]> {
+  // C-1: return type is TripSearchResult[] instead of any[]
+  async findAvailableTrips(
+    lat: number,
+    lng: number,
+    destLat?: number,
+    destLng?: number,
+  ): Promise<TripSearchResult[]> {
+    // B-5: getDWithinCondition now returns [condition, params] — spread with ...
+    // 'pickup' key → pickupLat / pickupLng / pickupRadius params
     const buildBase = () =>
       this.tripsRepository.createQueryBuilder('trip')
         .leftJoin('trip.driver', 'driver')
@@ -100,26 +118,27 @@ export class TripsService {
         .where('trip.status = :status', { status: TripStatus.SCHEDULED })
         .andWhere('trip.availableSeats > 0')
         .andWhere('trip.departureTime > :now', { now: new Date() })
-        .andWhere(this.geoService.getDWithinCondition('trip."routePolyline"', lat, lng, 500));
+        .andWhere(...this.geoService.getDWithinCondition('trip."routePolyline"', lat, lng, 500, 'pickup'));
 
     if (destLat === undefined || destLng === undefined) {
-      return buildBase().getMany();
+      return buildBase().getMany() as Promise<TripSearchResult[]>;
     }
 
-    // Non-detour trips: use existing distance-based matching
+    // Non-detour trips: distance-based matching
+    // 'dropoff' key → dropoffLat / dropoffLng / dropoffRadius (no collision with 'pickup')
     const nonDetourQb = buildBase()
       .andWhere('trip.detourEnabled = :detour', { detour: false })
-      // C-1: use named parameters — never interpolate user-supplied values into SQL
+      // C-1 / C-Phase2: named params for ST_Distance select
       .addSelect(
         `ST_Distance(trip."routePolyline"::geography, ST_SetSRID(ST_MakePoint(:destLng, :destLat), 4326)::geography)`,
         'distanceToDestination',
       )
       .setParameter('destLng', destLng)
       .setParameter('destLat', destLat)
-      .andWhere(this.geoService.getDWithinCondition('trip."routePolyline"', destLat, destLng, 800));
+      .andWhere(...this.geoService.getDWithinCondition('trip."routePolyline"', destLat, destLng, 800, 'dropoff'));
 
-    // Detour-enabled trips: origin filter only, dest filter done via Directions API
-    // M-5: cap to 10 to avoid firing too many Directions API calls
+    // Detour-enabled trips: origin filter only, dest filtered via Directions API
+    // M-5: cap at 10 to avoid too many Directions API calls
     const detourQb = buildBase()
       .andWhere('trip.detourEnabled = :detour', { detour: true })
       .take(10);
@@ -129,20 +148,18 @@ export class TripsService {
       detourQb.getMany(),
     ]);
 
-    const nonDetourResults = nonDetourEntities.map((entity, i) => {
+    const nonDetourResults: TripSearchResult[] = nonDetourEntities.map((entity, i) => {
       const dist = parseFloat(nonDetourRaw[i].distanceToDestination ?? '9999');
       return {
         ...entity,
         distanceToDestination: Math.round(dist),
         matchType: dist <= 200 ? 'exact' : 'near',
-      };
+      } as TripSearchResult;
     });
 
-    type DetourResult = Trip & { matchType: string; detourMinutes: number };
-
-    const detourResults = (
+    const detourResults: TripSearchResult[] = (
       await Promise.all(
-        detourTrips.map(async (trip): Promise<DetourResult | null> => {
+        detourTrips.map(async (trip): Promise<TripSearchResult | null> => {
           try {
             const coords: number[][] = trip.routePolyline?.coordinates;
             if (!coords?.length || coords.length < 2) return null;
@@ -157,7 +174,7 @@ export class TripsService {
             const detourMinutes = Math.round(detourSeconds / 60);
 
             if (detourMinutes <= trip.maxDetourMinutes) {
-              return { ...trip, matchType: 'detour', detourMinutes };
+              return { ...trip, matchType: 'detour', detourMinutes } as TripSearchResult;
             }
             return null;
           } catch {
@@ -165,40 +182,50 @@ export class TripsService {
           }
         }),
       )
-    ).filter((x): x is DetourResult => x !== null);
+    ).filter((x): x is TripSearchResult => x !== null);
 
-    type AnyResult = (typeof nonDetourResults[0]) | DetourResult;
-    const combined: AnyResult[] = [...nonDetourResults, ...detourResults];
+    const combined: TripSearchResult[] = [...nonDetourResults, ...detourResults];
 
     combined.sort((a, b) => {
       const order: Record<string, number> = { exact: 0, detour: 1, near: 2 };
       const aOrder = order[a.matchType] ?? 3;
       const bOrder = order[b.matchType] ?? 3;
       if (aOrder !== bOrder) return aOrder - bOrder;
-      const aDetour = (a as DetourResult).detourMinutes ?? 0;
-      const bDetour = (b as DetourResult).detourMinutes ?? 0;
-      if (a.matchType === 'detour') return aDetour - bDetour;
-      const aDist = (a as typeof nonDetourResults[0]).distanceToDestination ?? 0;
-      const bDist = (b as typeof nonDetourResults[0]).distanceToDestination ?? 0;
-      return aDist - bDist;
+      if (a.matchType === 'detour') return (a.detourMinutes ?? 0) - (b.detourMinutes ?? 0);
+      return (a.distanceToDestination ?? 0) - (b.distanceToDestination ?? 0);
     });
 
     return combined;
   }
 
-  async getStopsCoverage(stops: Array<{ id: string; lat: number; lng: number }>): Promise<Array<{ id: string; covered: boolean }>> {
-    return Promise.all(stops.map(async stop => {
-      // M-2: use EXISTS-style query (limit 1 + getRawOne) — avoids full COUNT scan
-      const row = await this.tripsRepository.createQueryBuilder('trip')
-        .select('1')
-        .where('trip.status = :status', { status: TripStatus.SCHEDULED })
-        .andWhere('trip.availableSeats > 0')
-        .andWhere('trip.departureTime > :now', { now: new Date() })
-        .andWhere(this.geoService.getDWithinCondition('trip."routePolyline"', stop.lat, stop.lng, 600))
-        .limit(1)
-        .getRawOne();
-      return { id: stop.id, covered: !!row };
-    }));
+  async getStopsCoverage(
+    stops: Array<{ id: string; lat: number; lng: number }>,
+  ): Promise<Array<{ id: string; covered: boolean }>> {
+    // B-2: process in batches of 5 to avoid 50 simultaneous DB connections
+    const BATCH_SIZE = 5;
+    const results: Array<{ id: string; covered: boolean }> = [];
+
+    for (let i = 0; i < stops.length; i += BATCH_SIZE) {
+      const batch = stops.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.all(
+        batch.map(async stop => {
+          // M-2: EXISTS-style query — limit(1) + getRawOne avoids a full COUNT scan
+          // B-5: 'stop' key → stopLat / stopLng / stopRadius
+          const row = await this.tripsRepository.createQueryBuilder('trip')
+            .select('1')
+            .where('trip.status = :status', { status: TripStatus.SCHEDULED })
+            .andWhere('trip.availableSeats > 0')
+            .andWhere('trip.departureTime > :now', { now: new Date() })
+            .andWhere(...this.geoService.getDWithinCondition('trip."routePolyline"', stop.lat, stop.lng, 600, 'stop'))
+            .limit(1)
+            .getRawOne();
+          return { id: stop.id, covered: !!row };
+        }),
+      );
+      results.push(...batchResults);
+    }
+
+    return results;
   }
 
   async findOne(tripId: string): Promise<Trip> {
@@ -287,7 +314,6 @@ export class TripsService {
     try {
       const overdueTrips = await this.tripsRepository.find({
         where: { status: TripStatus.SCHEDULED, departureTime: LessThan(new Date()) },
-        // M-3: load passenger relation so we can notify pending passengers
         relations: ['bookings', 'bookings.passenger', 'driver'],
       });
 
@@ -296,7 +322,7 @@ export class TripsService {
         if (!hasAccepted) {
           this.logger.log(`Auto-canceling empty trip ${trip.id} (no accepted passengers)`);
 
-          // M-3: cancel any still-pending bookings and notify those passengers
+          // Cancel any still-pending bookings and notify those passengers
           const pendingBookings = trip.bookings.filter(b => b.status === BookingStatus.PENDING);
           for (const booking of pendingBookings) {
             booking.status = BookingStatus.CANCELED;
@@ -339,6 +365,15 @@ export class TripsService {
           this.logger.log(`Auto-removing no-show booking ${booking.id} for trip ${trip.id}`);
           booking.status = BookingStatus.CANCELED;
           await this.bookingsRepository.save(booking);
+
+          // A-1: restore the seat — was missing, causing a permanent seat leak
+          await this.tripsRepository
+            .createQueryBuilder()
+            .update(Trip)
+            .set({ availableSeats: () => '"availableSeats" + 1' })
+            .where('id = :id', { id: trip.id })
+            .execute();
+
           try {
             this.notificationsService.notifyPassengerNoShow(booking.passenger.id, { bookingId: booking.id });
             this.notificationsService.notifyDriverBookingCanceled(trip.driver.id, {
@@ -420,7 +455,7 @@ export class TripsService {
 
     const { polylinePoints } = await this.directionsService.getRoute(allWaypoints);
 
-    // Encontrar el punto del polyline MÁS CERCANO al destino del pasajero
+    // Find the polyline point closest to the passenger's destination
     let closestIndex = 0;
     let closestDist = Infinity;
     polylinePoints.forEach(([lat, lng], i) => {
@@ -431,7 +466,6 @@ export class TripsService {
       }
     });
 
-    // Recortar hasta ese punto e incluir el destino exacto del pasajero al final
     const trimmedPoints: [number, number][] = [
       ...polylinePoints.slice(0, closestIndex + 1),
       [destLat, destLng],
@@ -448,7 +482,7 @@ export class TripsService {
   async cancelTrip(tripId: string, driverId: string): Promise<Trip> {
     const trip = await this.tripsRepository.findOne({
       where: { id: tripId },
-      relations: ['driver']
+      relations: ['driver'],
     });
 
     if (!trip) throw new NotFoundException('Trip no encontrado');
@@ -460,14 +494,14 @@ export class TripsService {
 
     const bookingsToCancel = await this.bookingsRepository.find({
       where: { trip: { id: tripId } },
-      relations: ['passenger']
+      relations: ['passenger'],
     });
 
     await this.bookingsRepository.createQueryBuilder()
       .update(Booking)
       .set({ status: BookingStatus.CANCELED })
-      .where("trip.id = :tripId", { tripId })
-      .andWhere("status IN (:...statuses)", { statuses: [BookingStatus.PENDING, BookingStatus.ACCEPTED] })
+      .where('trip.id = :tripId', { tripId })
+      .andWhere('status IN (:...statuses)', { statuses: [BookingStatus.PENDING, BookingStatus.ACCEPTED] })
       .execute();
 
     for (const b of bookingsToCancel) {

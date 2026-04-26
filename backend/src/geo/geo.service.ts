@@ -18,11 +18,26 @@ export class GeoService {
     };
   }
 
-  getDWithinCondition(lineColumn: string, lat: number, lng: number, radiusInMeters: number): string {
-    return `ST_DWithin(${lineColumn}::geography, ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography, ${radiusInMeters})`;
-  }
-
-  getClosestPointQuery(lineColumn: string, lat: number, lng: number): string {
-    return `ST_AsGeoJSON(ST_ClosestPoint(${lineColumn}::geometry, ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geometry))`;
+  /**
+   * Returns a [condition, params] tuple for use with TypeORM QueryBuilder:
+   *   .andWhere(...geoService.getDWithinCondition(col, lat, lng, radius, 'key'))
+   *
+   * The `key` prefix must be unique within a single QueryBuilder instance to
+   * prevent parameter name collisions when the method is called multiple times
+   * on the same query (e.g. once for pickup, once for dropoff).
+   *
+   * B-5: named parameters replace raw number interpolation.
+   */
+  getDWithinCondition(
+    lineColumn: string,
+    lat: number,
+    lng: number,
+    radiusInMeters: number,
+    key: string,
+  ): [string, Record<string, unknown>] {
+    return [
+      `ST_DWithin(${lineColumn}::geography, ST_SetSRID(ST_MakePoint(:${key}Lng, :${key}Lat), 4326)::geography, :${key}Radius)`,
+      { [`${key}Lat`]: lat, [`${key}Lng`]: lng, [`${key}Radius`]: radiusInMeters },
+    ];
   }
 }
