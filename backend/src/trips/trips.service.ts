@@ -266,43 +266,61 @@ export class TripsService {
 
   @Cron('* * * * *')
   async autoCancelEmptyTrips(): Promise<void> {
-    const overdueTrips = await this.tripsRepository.find({
-      where: { status: TripStatus.SCHEDULED, departureTime: LessThan(new Date()) },
-      relations: ['bookings', 'driver'],
-    });
+    try {
+      const overdueTrips = await this.tripsRepository.find({
+        where: { status: TripStatus.SCHEDULED, departureTime: LessThan(new Date()) },
+        relations: ['bookings', 'driver'],
+      });
 
-    for (const trip of overdueTrips) {
-      const hasAccepted = trip.bookings.some(b => b.status === BookingStatus.ACCEPTED);
-      if (!hasAccepted) {
-        trip.status = TripStatus.CANCELED;
-        await this.tripsRepository.save(trip);
-        this.notificationsService.notifyDriverTripAutoCanceled(trip.driver.id, { tripId: trip.id });
+      for (const trip of overdueTrips) {
+        const hasAccepted = trip.bookings.some(b => b.status === BookingStatus.ACCEPTED);
+        if (!hasAccepted) {
+          this.logger.log(`Auto-canceling empty trip ${trip.id} (no accepted passengers)`);
+          trip.status = TripStatus.CANCELED;
+          await this.tripsRepository.save(trip);
+          try {
+            this.notificationsService.notifyDriverTripAutoCanceled(trip.driver.id, { tripId: trip.id });
+          } catch (notifyErr) {
+            this.logger.warn(`Notification failed for auto-canceled trip ${trip.id}: ${notifyErr.message}`);
+          }
+        }
       }
+    } catch (err) {
+      this.logger.error('autoCancelEmptyTrips failed', err);
     }
   }
 
   @Cron('* * * * *')
   async autoRemoveNoShows(): Promise<void> {
-    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-    const trips = await this.tripsRepository.find({
-      where: { status: TripStatus.SCHEDULED, departureTime: LessThan(fiveMinutesAgo) },
-      relations: ['bookings', 'bookings.passenger', 'driver'],
-    });
+    try {
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+      const trips = await this.tripsRepository.find({
+        where: { status: TripStatus.SCHEDULED, departureTime: LessThan(fiveMinutesAgo) },
+        relations: ['bookings', 'bookings.passenger', 'driver'],
+      });
 
-    for (const trip of trips) {
-      const noShows = trip.bookings.filter(
-        b => b.status === BookingStatus.ACCEPTED && !b.isBoarded,
-      );
-      for (const booking of noShows) {
-        booking.status = BookingStatus.CANCELED;
-        await this.bookingsRepository.save(booking);
-        this.notificationsService.notifyPassengerNoShow(booking.passenger.id, { bookingId: booking.id });
-        this.notificationsService.notifyDriverBookingCanceled(trip.driver.id, {
-          bookingId: booking.id,
-          tripId: trip.id,
-          passengerName: booking.passenger.name,
-        });
+      for (const trip of trips) {
+        const noShows = trip.bookings.filter(
+          b => b.status === BookingStatus.ACCEPTED && !b.isBoarded,
+        );
+        for (const booking of noShows) {
+          this.logger.log(`Auto-removing no-show booking ${booking.id} for trip ${trip.id}`);
+          booking.status = BookingStatus.CANCELED;
+          await this.bookingsRepository.save(booking);
+          try {
+            this.notificationsService.notifyPassengerNoShow(booking.passenger.id, { bookingId: booking.id });
+            this.notificationsService.notifyDriverBookingCanceled(trip.driver.id, {
+              bookingId: booking.id,
+              tripId: trip.id,
+              passengerName: booking.passenger.name,
+            });
+          } catch (notifyErr) {
+            this.logger.warn(`Notification failed for no-show booking ${booking.id}: ${notifyErr.message}`);
+          }
+        }
       }
+    } catch (err) {
+      this.logger.error('autoRemoveNoShows failed', err);
     }
   }
 
