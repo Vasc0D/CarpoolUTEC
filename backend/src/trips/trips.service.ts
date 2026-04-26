@@ -50,6 +50,11 @@ export class TripsService {
       throw new ConflictException('Ya tienes un viaje programado para ese día');
     }
 
+    // H-1: reject trips scheduled in the past
+    if (new Date(createTripDto.departureTime) <= new Date()) {
+      throw new BadRequestException('La hora de salida debe ser en el futuro');
+    }
+
     const origin = { lat: createTripDto.route[0][0], lng: createTripDto.route[0][1] };
     const destination = {
       lat: createTripDto.route[createTripDto.route.length - 1][0],
@@ -104,15 +109,20 @@ export class TripsService {
     // Non-detour trips: use existing distance-based matching
     const nonDetourQb = buildBase()
       .andWhere('trip.detourEnabled = :detour', { detour: false })
+      // C-1: use named parameters — never interpolate user-supplied values into SQL
       .addSelect(
-        `ST_Distance(trip."routePolyline"::geography, ST_SetSRID(ST_MakePoint(${destLng}, ${destLat}), 4326)::geography)`,
+        `ST_Distance(trip."routePolyline"::geography, ST_SetSRID(ST_MakePoint(:destLng, :destLat), 4326)::geography)`,
         'distanceToDestination',
       )
+      .setParameter('destLng', destLng)
+      .setParameter('destLat', destLat)
       .andWhere(this.geoService.getDWithinCondition('trip."routePolyline"', destLat, destLng, 800));
 
     // Detour-enabled trips: origin filter only, dest filter done via Directions API
+    // M-5: cap to 10 to avoid firing too many Directions API calls
     const detourQb = buildBase()
-      .andWhere('trip.detourEnabled = :detour', { detour: true });
+      .andWhere('trip.detourEnabled = :detour', { detour: true })
+      .take(10);
 
     const [{ entities: nonDetourEntities, raw: nonDetourRaw }, detourTrips] = await Promise.all([
       nonDetourQb.getRawAndEntities(),
@@ -178,13 +188,16 @@ export class TripsService {
 
   async getStopsCoverage(stops: Array<{ id: string; lat: number; lng: number }>): Promise<Array<{ id: string; covered: boolean }>> {
     return Promise.all(stops.map(async stop => {
-      const count = await this.tripsRepository.createQueryBuilder('trip')
+      // M-2: use EXISTS-style query (limit 1 + getRawOne) — avoids full COUNT scan
+      const row = await this.tripsRepository.createQueryBuilder('trip')
+        .select('1')
         .where('trip.status = :status', { status: TripStatus.SCHEDULED })
         .andWhere('trip.availableSeats > 0')
         .andWhere('trip.departureTime > :now', { now: new Date() })
         .andWhere(this.geoService.getDWithinCondition('trip."routePolyline"', stop.lat, stop.lng, 600))
-        .getCount();
-      return { id: stop.id, covered: count > 0 };
+        .limit(1)
+        .getRawOne();
+      return { id: stop.id, covered: !!row };
     }));
   }
 
@@ -256,11 +269,16 @@ export class TripsService {
     return saved;
   }
 
-  async getMyTrips(driverId: string): Promise<Trip[]> {
+  // H-5: paginated to prevent unbounded result sets
+  async getMyTrips(driverId: string, page = 1, limit = 20): Promise<Trip[]> {
+    const safePage = Math.max(1, page);
+    const safeLimit = Math.min(Math.max(1, limit), 50);
     return this.tripsRepository.find({
       where: { driver: { id: driverId } },
       relations: ['bookings', 'bookings.passenger'],
       order: { departureTime: 'DESC' },
+      take: safeLimit,
+      skip: (safePage - 1) * safeLimit,
     });
   }
 
@@ -269,13 +287,27 @@ export class TripsService {
     try {
       const overdueTrips = await this.tripsRepository.find({
         where: { status: TripStatus.SCHEDULED, departureTime: LessThan(new Date()) },
-        relations: ['bookings', 'driver'],
+        // M-3: load passenger relation so we can notify pending passengers
+        relations: ['bookings', 'bookings.passenger', 'driver'],
       });
 
       for (const trip of overdueTrips) {
         const hasAccepted = trip.bookings.some(b => b.status === BookingStatus.ACCEPTED);
         if (!hasAccepted) {
           this.logger.log(`Auto-canceling empty trip ${trip.id} (no accepted passengers)`);
+
+          // M-3: cancel any still-pending bookings and notify those passengers
+          const pendingBookings = trip.bookings.filter(b => b.status === BookingStatus.PENDING);
+          for (const booking of pendingBookings) {
+            booking.status = BookingStatus.CANCELED;
+            await this.bookingsRepository.save(booking);
+            try {
+              this.notificationsService.notifyPassengerTripCanceled(booking.passenger.id, { tripId: trip.id });
+            } catch (notifyErr) {
+              this.logger.warn(`Notification failed for pending booking ${booking.id} on canceled trip ${trip.id}: ${notifyErr.message}`);
+            }
+          }
+
           trip.status = TripStatus.CANCELED;
           await this.tripsRepository.save(trip);
           try {

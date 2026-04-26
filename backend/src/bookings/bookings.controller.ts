@@ -1,19 +1,20 @@
 import { Controller, Post, Patch, Get, Param, UseGuards, Req, Body } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { BookingsService } from './bookings.service';
+import { CreateBookingDto } from './dto/create-booking.dto';
 
 @Controller('bookings')
 @UseGuards(AuthGuard('jwt'))
 export class BookingsController {
-  constructor(private readonly bookingsService: BookingsService) { }
+  constructor(private readonly bookingsService: BookingsService) {}
 
   @Post(':tripId')
   solicitSeat(
     @Param('tripId') tripId: string,
     @Req() req,
-    @Body() body: { destLat?: number; destLng?: number },
+    @Body() dto: CreateBookingDto,
   ) {
-    return this.bookingsService.solicitSeat(tripId, req.user.id, body.destLat, body.destLng);
+    return this.bookingsService.solicitSeat(tripId, req.user.id, dto.destLat, dto.destLng);
   }
 
   @Patch(':bookingId/accept')

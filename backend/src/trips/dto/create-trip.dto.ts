@@ -1,9 +1,12 @@
-import { IsBoolean, IsDateString, IsNotEmpty, IsArray, ArrayMinSize, IsOptional, IsString, IsNumber, Min } from 'class-validator';
+import {
+    IsBoolean, IsDateString, IsNotEmpty, IsArray, ArrayMinSize,
+    IsOptional, IsString, IsNumber, IsInt, Min, Max, MaxLength,
+} from 'class-validator';
 
 export class CreateTripDto {
     @IsArray()
     @ArrayMinSize(2)
-    route: [number, number][]; // Formato esperado: tuple de [Latitud, Longitud]
+    route: [number, number][];
 
     @IsDateString()
     @IsNotEmpty()
@@ -17,18 +20,26 @@ export class CreateTripDto {
     @IsOptional()
     detourEnabled?: boolean;
 
+    @IsInt()
+    @Min(1)
+    @Max(8)
     @IsOptional()
     availableSeats?: number;
 
+    @IsInt()
+    @Min(0)
+    @Max(60)
     @IsOptional()
     maxDetourMinutes?: number;
 
     @IsNumber()
     @Min(0)
+    @Max(999)
     @IsOptional()
     pricePerSeat?: number;
 
     @IsString()
     @IsNotEmpty()
+    @MaxLength(500)
     meetingPoint: string;
 }

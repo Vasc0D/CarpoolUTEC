@@ -37,14 +37,6 @@ export class Booking {
     @Column({ type: 'decimal', precision: 9, scale: 6, nullable: true })
     destLng: number | null;
 
-    @Column({
-        type: 'geometry',
-        spatialFeatureType: 'Point',
-        srid: 4326,
-        nullable: true,
-    })
-    pickupPoint: any;
-
     @CreateDateColumn()
     createdAt: Date;
 

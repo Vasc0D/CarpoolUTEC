@@ -4,10 +4,10 @@ export class BookingResponseDto {
     id: string;
     status: BookingStatus;
     isBoarded: boolean;
+    destLat: number | null;
+    destLng: number | null;
     trip: {
         id: string;
-        origin: any;
-        destination: any;
         departureTime: Date;
         driver: {
             id: string;

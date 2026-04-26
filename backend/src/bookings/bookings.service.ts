@@ -1,4 +1,7 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException, GoneException, Logger } from '@nestjs/common';
+import {
+    Injectable, NotFoundException, BadRequestException,
+    ConflictException, ForbiddenException, GoneException, Logger,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { Booking, BookingStatus } from './entities/booking.entity';
@@ -22,12 +25,12 @@ export class BookingsService {
     private readonly notificationsService: NotificationsService,
     private readonly directionsService: DirectionsService,
     private readonly geoService: GeoService,
-  ) { }
+  ) {}
 
   async solicitSeat(tripId: string, passengerId: string, destLat?: number, destLng?: number): Promise<BookingResponseDto> {
     const trip = await this.tripsRepository.findOne({
       where: { id: tripId },
-      relations: ['driver']
+      relations: ['driver'],
     });
 
     if (!trip) throw new NotFoundException('El viaje no existe');
@@ -41,7 +44,6 @@ export class BookingsService {
         status: In([BookingStatus.PENDING, BookingStatus.ACCEPTED]),
       },
     });
-
     if (activeBooking) {
       throw new ConflictException('Ya tienes una reserva activa. Cancélala antes de pedir otro viaje.');
     }
@@ -59,8 +61,17 @@ export class BookingsService {
     });
 
     if (isAutoAccept) {
-      trip.availableSeats -= 1;
-      await this.tripsRepository.save(trip);
+      // H-3: atomic decrement to prevent race conditions
+      const updateResult = await this.tripsRepository
+        .createQueryBuilder()
+        .update(Trip)
+        .set({ availableSeats: () => '"availableSeats" - 1' })
+        .where('id = :id AND "availableSeats" > 0', { id: trip.id })
+        .execute();
+
+      if (updateResult.affected === 0) {
+        throw new BadRequestException('El viaje ya está lleno');
+      }
 
       if (trip.detourEnabled && destLat != null && destLng != null) {
         await this.recalculateRoute(trip, passengerId, destLat, destLng);
@@ -83,18 +94,24 @@ export class BookingsService {
   async acceptBooking(bookingId: string, driverId: string): Promise<BookingResponseDto> {
     const booking = await this.bookingsRepository.findOne({
       where: { id: bookingId },
-      relations: ['trip', 'trip.driver', 'passenger']
+      relations: ['trip', 'trip.driver', 'passenger'],
     });
 
     if (!booking) throw new NotFoundException('Reserva no encontrada');
     if (booking.trip.driver.id !== driverId) throw new ForbiddenException('Solo el conductor puede aceptar reservas');
     if (booking.status !== BookingStatus.PENDING) throw new BadRequestException('La reserva no está pendiente');
-    if (booking.trip.availableSeats === 0) throw new BadRequestException('El viaje ya está lleno');
 
-    booking.status = BookingStatus.ACCEPTED;
-    booking.trip.availableSeats -= 1;
+    // H-3: atomic decrement — prevents over-accepting when multiple bookings are accepted simultaneously
+    const updateResult = await this.tripsRepository
+      .createQueryBuilder()
+      .update(Trip)
+      .set({ availableSeats: () => '"availableSeats" - 1' })
+      .where('id = :id AND "availableSeats" > 0', { id: booking.trip.id })
+      .execute();
 
-    await this.tripsRepository.save(booking.trip);
+    if (updateResult.affected === 0) {
+      throw new BadRequestException('El viaje ya está lleno');
+    }
 
     const destLat = booking.destLat != null ? Number(booking.destLat) : null;
     const destLng = booking.destLng != null ? Number(booking.destLng) : null;
@@ -103,11 +120,12 @@ export class BookingsService {
       await this.recalculateRoute(booking.trip, booking.passenger.id, destLat, destLng);
     }
 
+    booking.status = BookingStatus.ACCEPTED;
     const savedBooking = await this.bookingsRepository.save(booking);
 
     this.notificationsService.notifyPassengerStatusChange(booking.passenger.id, {
       bookingId: savedBooking.id,
-      status: savedBooking.status
+      status: savedBooking.status,
     });
 
     return this.mapToResponseDto(savedBooking);
@@ -138,25 +156,22 @@ export class BookingsService {
   async rejectBooking(bookingId: string, driverId: string): Promise<BookingResponseDto> {
     const booking = await this.bookingsRepository.findOne({
       where: { id: bookingId },
-      relations: ['trip', 'trip.driver', 'passenger']
+      relations: ['trip', 'trip.driver', 'passenger'],
     });
 
     if (!booking) throw new NotFoundException('Reserva no encontrada');
     if (booking.trip.driver.id !== driverId) throw new ForbiddenException('Solo el conductor puede rechazar');
-
-    if (booking.status === BookingStatus.ACCEPTED) {
-      throw new ForbiddenException('No puedes rechazar a un pasajero que ya ha sido aceptado. El compromiso está hecho.');
+    // M-1: explicit guard instead of silent fall-through
+    if (booking.status !== BookingStatus.PENDING) {
+      throw new BadRequestException('Solo puedes rechazar reservas pendientes');
     }
 
-    if (booking.status === BookingStatus.PENDING) {
-      booking.status = BookingStatus.REJECTED;
-    }
-
+    booking.status = BookingStatus.REJECTED;
     const savedBooking = await this.bookingsRepository.save(booking);
 
     this.notificationsService.notifyPassengerStatusChange(booking.passenger.id, {
       bookingId: savedBooking.id,
-      status: savedBooking.status
+      status: savedBooking.status,
     });
 
     return this.mapToResponseDto(savedBooking);
@@ -171,15 +186,23 @@ export class BookingsService {
     if (!booking) throw new NotFoundException('Reserva no encontrada');
     if (booking.passenger.id !== passengerId)
       throw new ForbiddenException('No puedes cancelar una reserva que no es tuya');
-    if ([BookingStatus.CANCELED, BookingStatus.REJECTED].includes(booking.status))
+
+    // H-2: guard COMPLETED status — history must not be mutable
+    const nonCancelable = [BookingStatus.CANCELED, BookingStatus.REJECTED, BookingStatus.COMPLETED];
+    if (nonCancelable.includes(booking.status))
       throw new BadRequestException('No puedes cancelar esta reserva');
 
     const wasAccepted = booking.status === BookingStatus.ACCEPTED;
     booking.status = BookingStatus.CANCELED;
 
     if (wasAccepted) {
-      booking.trip.availableSeats += 1;
-      await this.tripsRepository.save(booking.trip);
+      // H-3: atomic increment
+      await this.tripsRepository
+        .createQueryBuilder()
+        .update(Trip)
+        .set({ availableSeats: () => '"availableSeats" + 1' })
+        .where('id = :id', { id: booking.trip.id })
+        .execute();
     }
 
     const savedBooking = await this.bookingsRepository.save(booking);
@@ -223,9 +246,20 @@ export class BookingsService {
     if (booking.status !== BookingStatus.ACCEPTED)
       throw new BadRequestException('Solo se pueden marcar como ausentes reservas aceptadas');
 
+    // H-4: no-show only valid at or after departure time
+    if (new Date() < new Date(booking.trip.departureTime)) {
+      throw new BadRequestException('Solo puedes marcar ausencia después de la hora de salida');
+    }
+
     booking.status = BookingStatus.CANCELED;
-    booking.trip.availableSeats += 1;
-    await this.tripsRepository.save(booking.trip);
+
+    // H-3: atomic increment
+    await this.tripsRepository
+      .createQueryBuilder()
+      .update(Trip)
+      .set({ availableSeats: () => '"availableSeats" + 1' })
+      .where('id = :id', { id: booking.trip.id })
+      .execute();
 
     const saved = await this.bookingsRepository.save(booking);
     this.notificationsService.notifyPassengerNoShow(booking.passenger.id, { bookingId: saved.id });
@@ -236,9 +270,8 @@ export class BookingsService {
     const bookings = await this.bookingsRepository.find({
       where: { passenger: { id: passengerId } },
       relations: ['trip', 'trip.driver', 'trip.driver.vehicle', 'passenger'],
-      order: { createdAt: 'DESC' }
+      order: { createdAt: 'DESC' },
     });
-
     return bookings.map(b => this.mapToResponseDto(b));
   }
 
@@ -247,21 +280,23 @@ export class BookingsService {
       id: booking.id,
       status: booking.status,
       isBoarded: booking.isBoarded,
+      destLat: booking.destLat,
+      destLng: booking.destLng,
       trip: {
         id: booking.trip.id,
-        origin: booking.trip.routePolyline?.coordinates?.[0] || null,
-        destination: booking.trip.routePolyline?.coordinates?.[booking.trip.routePolyline?.coordinates?.length - 1] || null,
         departureTime: booking.trip.departureTime,
         driver: {
           id: booking.trip.driver?.id,
           name: booking.trip.driver?.name,
-          vehicle: booking.trip.driver?.vehicle ? {
-            brand: booking.trip.driver.vehicle.brand,
-            model: booking.trip.driver.vehicle.model,
-            color: booking.trip.driver.vehicle.color,
-            plate: booking.trip.driver.vehicle.plate,
-          } : null,
-        }
+          vehicle: booking.trip.driver?.vehicle
+            ? {
+                brand: booking.trip.driver.vehicle.brand,
+                model: booking.trip.driver.vehicle.model,
+                color: booking.trip.driver.vehicle.color,
+                plate: booking.trip.driver.vehicle.plate,
+              }
+            : null,
+        },
       },
       passenger: {
         id: booking.passenger?.id,
