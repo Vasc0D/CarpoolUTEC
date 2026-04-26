@@ -12,6 +12,8 @@ import { axiosClient } from '../api/axiosClient';
 const { width, height } = Dimensions.get('window');
 
 const UTEC_COORDS = { latitude: -12.135, longitude: -77.023 };
+// Q-2: precise exit coordinates kept as a single source of truth (used for meeting point)
+const UTEC_EXIT_COORDS = { latitude: -12.135570, longitude: -77.021908 };
 const GOOGLE_MAPS_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_KEY || 'DUMMY_KEY';
 
 export const CreateTripScreen = () => {
@@ -35,7 +37,8 @@ export const CreateTripScreen = () => {
             return;
         }
 
-        const minDeparture = new Date(Date.now() + 0 * 60 * 1000);
+        // P-4: was `0 * 60 * 1000` (no buffer) — message and code now agree on 20 minutes
+        const minDeparture = new Date(Date.now() + 20 * 60 * 1000);
         if (departureTime < minDeparture) {
             Alert.alert('Hora inválida', 'La hora de salida debe ser al menos 20 minutos a partir de ahora.');
             return;
@@ -50,7 +53,7 @@ export const CreateTripScreen = () => {
                 detourEnabled,
                 maxDetourMinutes: detourEnabled ? detour : 0,
                 autoAccept,
-                meetingPoint: JSON.stringify({ type: 'Point', coordinates: [-77.021908, -12.135570] }),
+                meetingPoint: JSON.stringify({ type: 'Point', coordinates: [UTEC_EXIT_COORDS.longitude, UTEC_EXIT_COORDS.latitude] }),
             });
 
             Alert.alert('¡Éxito!', 'Tu viaje ha sido publicado correctamente.', [

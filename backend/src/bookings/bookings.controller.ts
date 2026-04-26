@@ -1,4 +1,4 @@
-import { Controller, Post, Patch, Get, Param, UseGuards, Req, Body } from '@nestjs/common';
+import { Controller, Post, Patch, Get, Param, UseGuards, Req, Body, Query, DefaultValuePipe, ParseIntPipe } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { BookingsService } from './bookings.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
@@ -43,7 +43,11 @@ export class BookingsController {
   }
 
   @Get('me')
-  getMyBookings(@Req() req) {
-    return this.bookingsService.getMyBookings(req.user.id);
+  getMyBookings(
+    @Req() req,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+  ) {
+    return this.bookingsService.getMyBookings(req.user.id, page, limit);
   }
 }

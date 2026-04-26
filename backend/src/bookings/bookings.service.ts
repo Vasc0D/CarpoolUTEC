@@ -266,11 +266,16 @@ export class BookingsService {
     return this.mapToResponseDto(saved);
   }
 
-  async getMyBookings(passengerId: string): Promise<BookingResponseDto[]> {
+  // P-5: paginated — prevents loading entire booking history in one query
+  async getMyBookings(passengerId: string, page = 1, limit = 20): Promise<BookingResponseDto[]> {
+    const safePage = Math.max(1, page);
+    const safeLimit = Math.min(Math.max(1, limit), 50);
     const bookings = await this.bookingsRepository.find({
       where: { passenger: { id: passengerId } },
       relations: ['trip', 'trip.driver', 'trip.driver.vehicle', 'passenger'],
       order: { createdAt: 'DESC' },
+      take: safeLimit,
+      skip: (safePage - 1) * safeLimit,
     });
     return bookings.map(b => this.mapToResponseDto(b));
   }

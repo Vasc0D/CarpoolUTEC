@@ -8,7 +8,8 @@ import { axiosClient } from '../api/axiosClient';
 // Required by Expo AuthSession to close the browser tab after redirect
 WebBrowser.maybeCompleteAuthSession();
 
-const BACKEND_URL = 'http://localhost:3000';
+// P-6: URL from env — avoids hardcoded localhost in shipped code
+const BACKEND_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000';
 
 export const LoginScreen = () => {
     const login = useAuthStore((state) => state.login);

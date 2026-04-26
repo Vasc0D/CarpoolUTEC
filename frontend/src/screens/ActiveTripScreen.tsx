@@ -48,13 +48,15 @@ export const ActiveTripScreen = () => {
 
     // Fetch trip details on mount
     useEffect(() => {
+        // P-7: keep the timer ID so we can cancel it if the component unmounts before it fires
+        let fitTimer: ReturnType<typeof setTimeout>;
         axiosClient.get(`/trips/${tripId}`)
             .then(res => {
                 setTrip(res.data);
                 const coords = res.data.routePolyline?.coordinates;
                 if (coords?.length) {
                     const mapped = coords.map((c: number[]) => ({ latitude: c[1], longitude: c[0] }));
-                    setTimeout(() => {
+                    fitTimer = setTimeout(() => {
                         mapRef.current?.fitToCoordinates(mapped, {
                             edgePadding: { top: 60, right: 40, bottom: 220, left: 40 },
                             animated: true,
@@ -63,6 +65,7 @@ export const ActiveTripScreen = () => {
                 }
             })
             .catch(() => Alert.alert('Error', 'No se pudo cargar la información del viaje.'));
+        return () => clearTimeout(fitTimer);
     }, [tripId]);
 
     // Socket: driver location updates + trip finished

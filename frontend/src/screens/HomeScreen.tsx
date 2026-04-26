@@ -318,6 +318,15 @@ export const HomeScreen = () => {
     const [tick, setTick] = useState(0);
     const pulseAnim = useRef(new Animated.Value(1)).current;
 
+    // P-1 / P-9: stable refs so socket effects don't need these callbacks as deps —
+    // prevents the socket from disconnecting every time the destination changes.
+    const fetchTripsRef = useRef<(...args: any[]) => any>(() => {});
+    const fetchStopsCoverageRef = useRef<() => any>(() => {});
+    const fetchActiveDriverTripRef = useRef<() => any>(() => {});
+
+    // P-2: track keys already queued/completed so we never wipe and re-request the whole cache
+    const geocodedKeysRef = useRef<Set<string>>(new Set());
+
     const [previewTrip, setPreviewTrip] = useState<TripMarker | null>(null);
     const [dropoffPoint, setDropoffPoint] = useState<{ latitude: number; longitude: number } | null>(null);
     const [routeToDropoff, setRouteToDropoff] = useState<{ latitude: number; longitude: number }[]>([]);
@@ -402,8 +411,18 @@ export const HomeScreen = () => {
         }
     }, [appMode, isDriver]);
 
+    // Keep callback refs in sync — socket effects use these refs instead of the
+    // functions directly, so they never need to re-subscribe just because a dep changed.
+    useEffect(() => { fetchTripsRef.current = fetchTrips; }, [fetchTrips]);
+    useEffect(() => { fetchStopsCoverageRef.current = fetchStopsCoverage; }, [fetchStopsCoverage]);
+    useEffect(() => { fetchActiveDriverTripRef.current = fetchActiveDriverTrip; }, [fetchActiveDriverTrip]);
+
     const reverseGeocode = useCallback(async (lat: number, lng: number) => {
         const key = `${lat.toFixed(5)},${lng.toFixed(5)}`;
+        // P-2: skip if already fetched or in-flight — prevents redundant API calls when
+        // booking count changes and the geocode effect re-runs for the same addresses
+        if (geocodedKeysRef.current.has(key)) return;
+        geocodedKeysRef.current.add(key);
         try {
             const res = await fetch(
                 `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_MAPS_KEY}&language=es`
@@ -419,7 +438,7 @@ export const HomeScreen = () => {
                 setGeocodedAddresses(prev => ({ ...prev, [key]: address }));
             }
         } catch {
-            // silent — coordinates shown as fallback
+            geocodedKeysRef.current.delete(key); // allow retry on transient failure
         }
     }, []);
 
@@ -539,12 +558,14 @@ export const HomeScreen = () => {
             latitude: c[1],
             longitude: c[0],
         }));
-        setTimeout(() => {
+        // P-7: store timer ID so it can be cancelled if the component unmounts before it fires
+        const fitTimer = setTimeout(() => {
             mapRef.current?.fitToCoordinates(coords, {
                 edgePadding: { top: 80, right: 40, bottom: 380, left: 40 },
                 animated: true,
             });
         }, 500);
+        return () => clearTimeout(fitTimer);
     }, [activeDriverTrip?.id, appMode]);
 
     useFocusEffect(
@@ -568,7 +589,7 @@ export const HomeScreen = () => {
             const bLng = b.destLng != null ? Number(b.destLng) : null;
             if (bLat != null && !isNaN(bLat) && bLng != null && !isNaN(bLng)) toGeocode.push([bLat, bLng]);
         }
-        setGeocodedAddresses({});
+        // P-2: no cache wipe — reverseGeocode checks geocodedKeysRef and skips already-fetched keys
         toGeocode.forEach(([lat, lng]) => reverseGeocode(lat, lng));
     }, [activeDriverTrip?.id, activeDriverTrip?.bookings?.length, reverseGeocode]);
 
@@ -586,12 +607,14 @@ export const HomeScreen = () => {
                     ? `${data.passengerName} se unió a tu viaje automáticamente.`
                     : `${data.passengerName} quiere unirse a tu viaje.`,
             );
-            fetchActiveDriverTrip();
+            // P-9: use ref to avoid stale closure (socket effect deps don't include fetchActiveDriverTrip)
+            fetchActiveDriverTripRef.current();
         });
 
         socket.on('booking_canceled', (data: { bookingId: string; tripId: string; passengerName: string }) => {
             Alert.alert('Pasajero canceló', `${data.passengerName} canceló su reserva.`);
-            fetchActiveDriverTrip();
+            // P-9: use ref to avoid stale closure
+            fetchActiveDriverTripRef.current();
         });
 
         socket.on('trip_auto_canceled', () => {
@@ -648,8 +671,9 @@ export const HomeScreen = () => {
         });
 
         socket.on('trip_published', () => {
-            fetchStopsCoverage();
-            fetchTrips();
+            // P-1: use refs so a destination change doesn't reconnect the socket
+            fetchStopsCoverageRef.current();
+            fetchTripsRef.current();
         });
 
         socket.on('noShowUpdated', (data: { bookingId: string }) => {
@@ -668,7 +692,7 @@ export const HomeScreen = () => {
         });
 
         return () => { socket.disconnect(); socketRef.current = null; };
-    }, [appMode, token, fetchStopsCoverage, fetchTrips]);
+    }, [appMode, token]); // P-1: fetchStopsCoverage / fetchTrips accessed via stable refs — omitting them prevents socket reconnect on destination change
 
     // ── Book seat ─────────────────────────────────────────────────────────────
     const handleBookSeat = async (tripId: string) => {

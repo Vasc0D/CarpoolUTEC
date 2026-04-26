@@ -280,10 +280,11 @@ export class TripsService {
     trip.status = TripStatus.COMPLETED;
     const saved = await this.tripsRepository.save(trip);
 
+    // P-3: UpdateQueryBuilder cannot JOIN relations in WHERE — reference the FK column directly
     await this.bookingsRepository.createQueryBuilder()
       .update(Booking)
       .set({ status: BookingStatus.COMPLETED })
-      .where('trip.id = :tripId', { tripId })
+      .where('"tripId" = :tripId', { tripId })
       .andWhere('status = :status', { status: BookingStatus.ACCEPTED })
       .execute();
 
@@ -497,10 +498,11 @@ export class TripsService {
       relations: ['passenger'],
     });
 
+    // P-3: UpdateQueryBuilder cannot JOIN relations in WHERE — reference the FK column directly
     await this.bookingsRepository.createQueryBuilder()
       .update(Booking)
       .set({ status: BookingStatus.CANCELED })
-      .where('trip.id = :tripId', { tripId })
+      .where('"tripId" = :tripId', { tripId })
       .andWhere('status IN (:...statuses)', { statuses: [BookingStatus.PENDING, BookingStatus.ACCEPTED] })
       .execute();
 
