@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-    View, Text, StyleSheet, FlatList, TouchableOpacity,
+    View, Text, StyleSheet, FlatList,
     ActivityIndicator, RefreshControl, Alert,
 } from 'react-native';
 import type { Socket } from 'socket.io-client';
@@ -64,17 +64,11 @@ const formatDateTime = (iso: string) => {
 
 interface BookingCardProps {
     booking: MyBooking;
-    canceling: boolean;
-    boarding: boolean;
-    onCancel: (id: string) => void;
-    onBoard: (id: string) => void;
 }
 
-const BookingCard: React.FC<BookingCardProps> = ({ booking, canceling, boarding, onCancel, onBoard }) => {
+const BookingCard: React.FC<BookingCardProps> = ({ booking }) => {
     const cfg = STATUS_CONFIG[booking.status];
-    const isAccepted = booking.status === 'ACCEPTED';
     const isCanceledByDriver = booking.status === 'CANCELED' && booking.canceledByDriver;
-    const canCancel = booking.status === 'PENDING' || (isAccepted && !booking.isBoarded);
     const { vehicle } = booking.trip.driver;
 
     return (
@@ -106,53 +100,16 @@ const BookingCard: React.FC<BookingCardProps> = ({ booking, canceling, boarding,
             {isCanceledByDriver && (
                 <View style={styles.canceledByDriverRow}>
                     <Ionicons name="warning-outline" size={15} color="#EF4444" />
-                    <Text style={styles.canceledByDriverText}>Viaje Cancelado por Conductor</Text>
+                    <Text style={styles.canceledByDriverText}>Viaje cancelado por el conductor</Text>
                 </View>
             )}
 
-            {/* Boarding confirmation */}
-            {isAccepted && (
-                booking.isBoarded ? (
-                    <View style={styles.boardedRow}>
-                        <Ionicons name="checkmark-circle" size={16} color="#10B981" />
-                        <Text style={styles.boardedText}>Ya estás a bordo</Text>
-                    </View>
-                ) : (
-                    <TouchableOpacity
-                        style={styles.boardBtn}
-                        onPress={() => onBoard(booking.id)}
-                        disabled={boarding}
-                        activeOpacity={0.75}
-                    >
-                        {boarding ? (
-                            <ActivityIndicator size="small" color="#FFF" />
-                        ) : (
-                            <>
-                                <Ionicons name="car-outline" size={16} color="#FFF" />
-                                <Text style={styles.boardBtnText}>Confirmar subida al auto</Text>
-                            </>
-                        )}
-                    </TouchableOpacity>
-                )
-            )}
-
-            {/* Cancel button */}
-            {canCancel && (
-                <TouchableOpacity
-                    style={styles.cancelBtn}
-                    onPress={() => onCancel(booking.id)}
-                    disabled={canceling}
-                    activeOpacity={0.75}
-                >
-                    {canceling ? (
-                        <ActivityIndicator size="small" color="#EF4444" />
-                    ) : (
-                        <>
-                            <Ionicons name="close-circle-outline" size={16} color="#EF4444" />
-                            <Text style={styles.cancelBtnText}>Cancelar reserva</Text>
-                        </>
-                    )}
-                </TouchableOpacity>
+            {/* Boarded indicator (informational only) */}
+            {booking.status === 'ACCEPTED' && booking.isBoarded && (
+                <View style={styles.boardedRow}>
+                    <Ionicons name="checkmark-circle" size={16} color="#10B981" />
+                    <Text style={styles.boardedText}>Ya estás a bordo</Text>
+                </View>
             )}
         </View>
     );
@@ -167,8 +124,6 @@ export const MyTripsScreen = () => {
     const [bookings, setBookings] = useState<MyBooking[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
-    const [cancelingId, setCancelingId] = useState<string | null>(null);
-    const [boardingId, setBoardingId] = useState<string | null>(null);
 
     const fetchBookings = useCallback(async (silent = false) => {
         if (!silent) setLoading(true);
@@ -188,7 +143,7 @@ export const MyTripsScreen = () => {
 
     useEffect(() => { fetchBookings(); }, [fetchBookings]);
 
-    // Real-time: trip canceled by driver or no-show by driver
+    // Real-time: trip canceled by driver or no-show
     useEffect(() => {
         if (!token) return;
         const socket = createSocket(token);
@@ -211,51 +166,6 @@ export const MyTripsScreen = () => {
 
         return () => { socket.disconnect(); socketRef.current = null; };
     }, [token]);
-
-    const handleBoard = async (bookingId: string) => {
-        setBoardingId(bookingId);
-        try {
-            await axiosClient.patch(`/bookings/${bookingId}/board`);
-            setBookings(prev =>
-                prev.map(b => b.id === bookingId ? { ...b, isBoarded: true } : b)
-            );
-        } catch (error: any) {
-            const msg = error.response?.data?.message || 'No se pudo confirmar la subida.';
-            Alert.alert('Error', Array.isArray(msg) ? msg.join('\n') : msg);
-        } finally {
-            setBoardingId(null);
-        }
-    };
-
-    const handleCancel = (bookingId: string) => {
-        Alert.alert(
-            'Cancelar reserva',
-            '¿Seguro que quieres cancelar esta reserva?',
-            [
-                { text: 'No', style: 'cancel' },
-                {
-                    text: 'Sí, cancelar',
-                    style: 'destructive',
-                    onPress: async () => {
-                        setCancelingId(bookingId);
-                        try {
-                            await axiosClient.patch(`/bookings/${bookingId}/cancel`);
-                            setBookings(prev =>
-                                prev.map(b =>
-                                    b.id === bookingId ? { ...b, status: 'CANCELED' as const } : b
-                                )
-                            );
-                        } catch (error: any) {
-                            const msg = error.response?.data?.message || 'No se pudo cancelar la reserva.';
-                            Alert.alert('Error', Array.isArray(msg) ? msg.join('\n') : msg);
-                        } finally {
-                            setCancelingId(null);
-                        }
-                    },
-                },
-            ]
-        );
-    };
 
     if (loading) {
         return (
@@ -281,15 +191,7 @@ export const MyTripsScreen = () => {
                     tintColor="#0EA5E9"
                 />
             }
-            renderItem={({ item }) => (
-                <BookingCard
-                    booking={item}
-                    canceling={cancelingId === item.id}
-                    boarding={boardingId === item.id}
-                    onCancel={handleCancel}
-                    onBoard={handleBoard}
-                />
-            )}
+            renderItem={({ item }) => <BookingCard booking={item} />}
             ListEmptyComponent={
                 <View style={styles.emptyState}>
                     <Ionicons name="bookmark-outline" size={52} color="#CBD5E1" />
@@ -337,23 +239,11 @@ const styles = StyleSheet.create({
     },
     canceledByDriverText: { fontSize: 13, fontWeight: '700', color: '#EF4444' },
 
-    boardBtn: {
-        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-        borderRadius: 12, paddingVertical: 10, backgroundColor: '#10B981',
-    },
-    boardBtnText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
     boardedRow: {
         flexDirection: 'row', alignItems: 'center', gap: 6,
         paddingVertical: 8, justifyContent: 'center',
     },
     boardedText: { fontSize: 14, fontWeight: '700', color: '#10B981' },
-
-    cancelBtn: {
-        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-        borderWidth: 1, borderColor: '#FECACA', borderRadius: 12,
-        paddingVertical: 10, backgroundColor: '#FFF5F5',
-    },
-    cancelBtnText: { fontSize: 14, fontWeight: '700', color: '#EF4444' },
 
     emptyState: { alignItems: 'center', gap: 10, paddingHorizontal: 40 },
     emptyTitle: { fontSize: 18, fontWeight: '800', color: '#334155' },
