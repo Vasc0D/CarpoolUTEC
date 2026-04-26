@@ -47,8 +47,9 @@ export const AddVehicleScreen = () => {
                 [{ text: 'OK', onPress: () => navigation.goBack() }],
             );
         } catch (error: any) {
-            console.error('Error al guardar vehículo:', error.response?.data || error.message);
-            Alert.alert('Error', 'Hubo un problema guardando los datos del vehículo.');
+            // L-1: console.error removed — do not leak server response data to device logs
+            const msg = error.response?.data?.message || 'Hubo un problema guardando los datos del vehículo.';
+            Alert.alert('Error', Array.isArray(msg) ? msg.join('\n') : msg);
         } finally {
             setLoading(false);
         }

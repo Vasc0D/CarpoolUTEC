@@ -69,7 +69,12 @@ export const CreateTripScreen = () => {
 
     const onTimeChange = (event: DateTimePickerEvent, selected?: Date) => {
         if (Platform.OS === 'android') setShowTimePicker(false);
-        if (event.type === 'set' && selected) setDepartureTime(selected);
+        if (event.type === 'set' && selected) {
+            // L-2: if the chosen time is already in the past for today, roll to tomorrow
+            // so the 20-min validation doesn't immediately reject a legitimate pick
+            const adjusted = selected < new Date() ? new Date(selected.getTime() + 24 * 60 * 60 * 1000) : selected;
+            setDepartureTime(adjusted);
+        }
     };
 
     const formatTime = (date: Date) =>

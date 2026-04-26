@@ -60,9 +60,9 @@ export class TripsService {
       throw new ConflictException('Ya tienes un viaje programado para ese día');
     }
 
-    // H-1: reject trips scheduled in the past
-    if (new Date(createTripDto.departureTime) <= new Date()) {
-      throw new BadRequestException('La hora de salida debe ser en el futuro');
+    // C-2: enforce same 20-minute buffer as the frontend — prevents API-level bypass
+    if (new Date(createTripDto.departureTime) < new Date(Date.now() + 20 * 60 * 1000)) {
+      throw new BadRequestException('La hora de salida debe ser al menos 20 minutos a partir de ahora');
     }
 
     const origin = { lat: createTripDto.route[0][0], lng: createTripDto.route[0][1] };

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, FlatList, ActivityIndicator, RefreshControl, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { axiosClient } from '../api/axiosClient';
@@ -96,7 +96,8 @@ export const DriverTripsScreen = () => {
             );
             setTrips(history);
         } catch {
-            // silent
+            // M-2: surface errors instead of showing a silent empty list
+            Alert.alert('Error', 'No se pudo cargar el historial de viajes.');
         } finally {
             setLoading(false);
             setRefreshing(false);

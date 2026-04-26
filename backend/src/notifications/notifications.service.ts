@@ -1,47 +1,60 @@
 import { Injectable } from '@nestjs/common';
 import { NotificationsGateway } from './notifications.gateway';
+import type {
+  NewBookingRequestPayload,
+  BookingStatusChangedPayload,
+  TripCanceledPayload,
+  TripStartedPayload,
+  TripFinishedPayload,
+  PassengerBoardedPayload,
+  NoShowUpdatedPayload,
+  BookingCanceledPayload,
+  TripAutoCanceledPayload,
+} from './notifications.types';
 
 @Injectable()
 export class NotificationsService {
   constructor(private readonly notificationsGateway: NotificationsGateway) { }
 
-  notifyDriverNewRequest(driverId: string, bookingData: any) {
-    this.notificationsGateway.server.to(driverId).emit('new_booking_request', bookingData);
+  // H-1: all methods now use explicit payload types — typos in field names are caught at compile time
+
+  notifyDriverNewRequest(driverId: string, payload: NewBookingRequestPayload): void {
+    this.notificationsGateway.server.to(driverId).emit('new_booking_request', payload);
   }
 
-  notifyPassengerStatusChange(passengerId: string, bookingData: any) {
-    this.notificationsGateway.server.to(passengerId).emit('booking_status_changed', bookingData);
+  notifyPassengerStatusChange(passengerId: string, payload: BookingStatusChangedPayload): void {
+    this.notificationsGateway.server.to(passengerId).emit('booking_status_changed', payload);
   }
 
-  notifyPassengerTripCanceled(passengerId: string, tripData: any) {
-    this.notificationsGateway.server.to(passengerId).emit('trip_canceled', tripData);
+  notifyPassengerTripCanceled(passengerId: string, payload: TripCanceledPayload): void {
+    this.notificationsGateway.server.to(passengerId).emit('trip_canceled', payload);
   }
 
-  notifyPassengerTripStarted(passengerId: string, data: any) {
-    this.notificationsGateway.server.to(passengerId).emit('trip_started', data);
+  notifyPassengerTripStarted(passengerId: string, payload: TripStartedPayload): void {
+    this.notificationsGateway.server.to(passengerId).emit('trip_started', payload);
   }
 
-  notifyPassengerTripFinished(passengerId: string, data: any) {
-    this.notificationsGateway.server.to(passengerId).emit('trip_finished', data);
+  notifyPassengerTripFinished(passengerId: string, payload: TripFinishedPayload): void {
+    this.notificationsGateway.server.to(passengerId).emit('trip_finished', payload);
   }
 
-  notifyDriverPassengerBoarded(driverId: string, data: any) {
-    this.notificationsGateway.server.to(driverId).emit('passengerBoarded', data);
+  notifyDriverPassengerBoarded(driverId: string, payload: PassengerBoardedPayload): void {
+    this.notificationsGateway.server.to(driverId).emit('passengerBoarded', payload);
   }
 
-  notifyPassengerNoShow(passengerId: string, data: any) {
-    this.notificationsGateway.server.to(passengerId).emit('noShowUpdated', data);
+  notifyPassengerNoShow(passengerId: string, payload: NoShowUpdatedPayload): void {
+    this.notificationsGateway.server.to(passengerId).emit('noShowUpdated', payload);
   }
 
-  notifyDriverBookingCanceled(driverId: string, data: { bookingId: string; tripId: string; passengerName: string }) {
-    this.notificationsGateway.server.to(driverId).emit('booking_canceled', data);
+  notifyDriverBookingCanceled(driverId: string, payload: BookingCanceledPayload): void {
+    this.notificationsGateway.server.to(driverId).emit('booking_canceled', payload);
   }
 
-  notifyDriverTripAutoCanceled(driverId: string, data: { tripId: string }) {
-    this.notificationsGateway.server.to(driverId).emit('trip_auto_canceled', data);
+  notifyDriverTripAutoCanceled(driverId: string, payload: TripAutoCanceledPayload): void {
+    this.notificationsGateway.server.to(driverId).emit('trip_auto_canceled', payload);
   }
 
-  notifyTripPublished() {
+  notifyTripPublished(): void {
     this.notificationsGateway.server.emit('trip_published');
   }
 }

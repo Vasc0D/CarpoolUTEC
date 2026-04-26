@@ -125,7 +125,7 @@ export class BookingsService {
 
     this.notificationsService.notifyPassengerStatusChange(booking.passenger.id, {
       bookingId: savedBooking.id,
-      status: savedBooking.status,
+      status: 'ACCEPTED', // narrowed literal — we just set this status above
     });
 
     return this.mapToResponseDto(savedBooking);
@@ -171,7 +171,7 @@ export class BookingsService {
 
     this.notificationsService.notifyPassengerStatusChange(booking.passenger.id, {
       bookingId: savedBooking.id,
-      status: savedBooking.status,
+      status: 'REJECTED', // narrowed literal — we just set this status above
     });
 
     return this.mapToResponseDto(savedBooking);

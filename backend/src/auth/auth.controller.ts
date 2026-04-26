@@ -1,15 +1,9 @@
 import { Controller, Get, Post, Body, Req, Res, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { ConfigService } from '@nestjs/config';
-import { IsString, IsNotEmpty } from 'class-validator';
 import { AuthService } from './auth.service';
+import { ExchangeCodeDto } from './dto/exchange-code.dto';
 import type { Response } from 'express';
-
-class ExchangeCodeDto {
-    @IsString()
-    @IsNotEmpty()
-    code: string;
-}
 
 @Controller('auth')
 export class AuthController {

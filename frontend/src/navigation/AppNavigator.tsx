@@ -62,7 +62,9 @@ export const AppNavigator = () => {
         // Otros errores (sin red, 500) → dejamos la sesión y el usuario entra igual
       })
       .finally(() => setSessionReady(true));
-  }, [_hasHydrated]);
+    // M-1: token and login added to satisfy exhaustive-deps; verified.current guards against re-runs
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [_hasHydrated, token, login]);
 
   if (!_hasHydrated || !sessionReady) return <Splash />;
 
