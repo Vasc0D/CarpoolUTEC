@@ -266,7 +266,7 @@ export class TripsService {
   async autoCancelEmptyTrips(): Promise<void> {
     const overdueTrips = await this.tripsRepository.find({
       where: { status: TripStatus.SCHEDULED, departureTime: LessThan(new Date()) },
-      relations: ['bookings'],
+      relations: ['bookings', 'driver'],
     });
 
     for (const trip of overdueTrips) {
@@ -274,6 +274,7 @@ export class TripsService {
       if (!hasAccepted) {
         trip.status = TripStatus.CANCELED;
         await this.tripsRepository.save(trip);
+        this.notificationsService.notifyDriverTripAutoCanceled(trip.driver.id, { tripId: trip.id });
       }
     }
   }
@@ -375,6 +376,8 @@ export class TripsService {
 
     if (!trip) throw new NotFoundException('Trip no encontrado');
     if (trip.driver.id !== driverId) throw new ForbiddenException('Solo el dueño puede cancelar el viaje');
+    if (new Date() >= new Date(trip.departureTime))
+      throw new BadRequestException('No puedes cancelar el viaje una vez que ha llegado la hora de salida');
 
     trip.status = TripStatus.CANCELED;
 
