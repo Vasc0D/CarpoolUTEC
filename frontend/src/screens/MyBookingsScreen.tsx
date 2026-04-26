@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-    View, Text, StyleSheet, FlatList, TouchableOpacity,
+    View, Text, StyleSheet, FlatList,
     ActivityIndicator, RefreshControl, Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -44,13 +44,10 @@ const formatDateTime = (iso: string) => {
 
 interface BookingCardProps {
     booking: MyBooking;
-    canceling: boolean;
-    onCancel: (id: string) => void;
 }
 
-const BookingCard: React.FC<BookingCardProps> = ({ booking, canceling, onCancel }) => {
+const BookingCard: React.FC<BookingCardProps> = ({ booking }) => {
     const cfg = STATUS_CONFIG[booking.status];
-    const canCancel = booking.status === 'PENDING' || booking.status === 'ACCEPTED';
 
     return (
         <View style={styles.card}>
@@ -71,25 +68,6 @@ const BookingCard: React.FC<BookingCardProps> = ({ booking, canceling, onCancel 
                     <Text style={[styles.statusText, { color: cfg.color }]}>{cfg.label}</Text>
                 </View>
             </View>
-
-            {/* Cancel button */}
-            {canCancel && (
-                <TouchableOpacity
-                    style={styles.cancelBtn}
-                    onPress={() => onCancel(booking.id)}
-                    disabled={canceling}
-                    activeOpacity={0.75}
-                >
-                    {canceling ? (
-                        <ActivityIndicator size="small" color="#EF4444" />
-                    ) : (
-                        <>
-                            <Ionicons name="close-circle-outline" size={16} color="#EF4444" />
-                            <Text style={styles.cancelBtnText}>Cancelar reserva</Text>
-                        </>
-                    )}
-                </TouchableOpacity>
-            )}
         </View>
     );
 };
@@ -101,7 +79,6 @@ export const MyBookingsScreen = () => {
     const [bookings, setBookings] = useState<MyBooking[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
-    const [cancelingId, setCancelingId] = useState<string | null>(null);
 
     const fetchBookings = useCallback(async (silent = false) => {
         if (!silent) setLoading(true);
@@ -117,36 +94,6 @@ export const MyBookingsScreen = () => {
     }, []);
 
     useEffect(() => { fetchBookings(); }, [fetchBookings]);
-
-    const handleCancel = (bookingId: string) => {
-        Alert.alert(
-            'Cancelar reserva',
-            '¿Seguro que quieres cancelar esta reserva?',
-            [
-                { text: 'No', style: 'cancel' },
-                {
-                    text: 'Sí, cancelar',
-                    style: 'destructive',
-                    onPress: async () => {
-                        setCancelingId(bookingId);
-                        try {
-                            await axiosClient.patch(`/bookings/${bookingId}/cancel`);
-                            setBookings(prev =>
-                                prev.map(b =>
-                                    b.id === bookingId ? { ...b, status: 'CANCELED' as const } : b
-                                )
-                            );
-                        } catch (error: any) {
-                            const msg = error.response?.data?.message || 'No se pudo cancelar la reserva.';
-                            Alert.alert('Error', Array.isArray(msg) ? msg.join('\n') : msg);
-                        } finally {
-                            setCancelingId(null);
-                        }
-                    },
-                },
-            ]
-        );
-    };
 
     if (loading) {
         return (
@@ -173,11 +120,7 @@ export const MyBookingsScreen = () => {
                 />
             }
             renderItem={({ item }) => (
-                <BookingCard
-                    booking={item}
-                    canceling={cancelingId === item.id}
-                    onCancel={handleCancel}
-                />
+                <BookingCard booking={item} />
             )}
             ListEmptyComponent={
                 <View style={styles.emptyState}>
@@ -200,7 +143,7 @@ const styles = StyleSheet.create({
     listEmpty: { flex: 1, justifyContent: 'center' },
 
     card: {
-        backgroundColor: '#FFF', borderRadius: 20, padding: 16, gap: 12,
+        backgroundColor: '#FFF', borderRadius: 20, padding: 16,
         shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.07, shadowRadius: 8, elevation: 3,
     },
@@ -218,13 +161,6 @@ const styles = StyleSheet.create({
         paddingHorizontal: 8, paddingVertical: 4, borderRadius: 20,
     },
     statusText: { fontSize: 11, fontWeight: '700' },
-
-    cancelBtn: {
-        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-        borderWidth: 1, borderColor: '#FECACA', borderRadius: 12,
-        paddingVertical: 10, backgroundColor: '#FFF5F5',
-    },
-    cancelBtnText: { fontSize: 14, fontWeight: '700', color: '#EF4444' },
 
     emptyState: { alignItems: 'center', gap: 10, paddingHorizontal: 40 },
     emptyTitle: { fontSize: 18, fontWeight: '800', color: '#334155' },

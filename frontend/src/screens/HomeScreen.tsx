@@ -298,6 +298,8 @@ export const HomeScreen = () => {
 
     const [myActiveBooking, setMyActiveBooking] = useState<ActiveBooking | null>(null);
     const [cancelingBooking, setCancelingBooking] = useState(false);
+    const [confirmingBoarding, setConfirmingBoarding] = useState(false);
+    const [boardedTripId, setBoardedTripId] = useState<string | null>(null);
 
     const [activeDriverTrip, setActiveDriverTrip] = useState<DriverTripSummary | null>(null);
     const [cancelingDriverTrip, setCancelingDriverTrip] = useState(false);
@@ -593,6 +595,22 @@ export const HomeScreen = () => {
             Alert.alert('Error', Array.isArray(msg) ? msg.join('\n') : msg);
         } finally {
             setBookingTripId(null);
+        }
+    };
+
+    // ── Confirm boarding ──────────────────────────────────────────────────────
+    const handleConfirmBoarding = async () => {
+        if (!myActiveBooking) return;
+        setConfirmingBoarding(true);
+        try {
+            await axiosClient.patch(`/bookings/${myActiveBooking.id}/board`);
+            setBoardedTripId(myActiveBooking.tripId);
+            Alert.alert('¡Confirmado!', 'Se registró tu subida al vehículo.');
+        } catch (error: any) {
+            const msg = error.response?.data?.message || 'No se pudo confirmar la subida.';
+            Alert.alert('Error', Array.isArray(msg) ? msg.join('\n') : msg);
+        } finally {
+            setConfirmingBoarding(false);
         }
     };
 
@@ -1025,22 +1043,39 @@ export const HomeScreen = () => {
                                                     Ver ruta
                                                 </Text>
                                             </TouchableOpacity>
-                                            <TouchableOpacity
-                                                style={[
-                                                    styles.tripCardBookBtn,
-                                                    (trip.availableSeats === 0 || (!!myActiveBooking && !isMyBooked)) && styles.tripCardBookBtnDisabled,
-                                                    isMyBooked && styles.tripCardBookBtnBooked,
-                                                ]}
-                                                onPress={() => handleBookSeat(trip.id)}
-                                                disabled={isBusy || trip.availableSeats === 0 || !!myActiveBooking}
-                                            >
-                                                {isBusy
-                                                    ? <ActivityIndicator size="small" color="#FFF" />
-                                                    : <Text style={styles.tripCardBookBtnText}>
-                                                        {trip.availableSeats === 0 ? 'Lleno' : isMyBooked ? 'Reservado' : 'Solicitar'}
-                                                      </Text>
-                                                }
-                                            </TouchableOpacity>
+                                            {isMyBooked &&
+                                             myActiveBooking?.status === 'ACCEPTED' &&
+                                             tick >= 0 &&
+                                             new Date() >= new Date(trip.departureTime) &&
+                                             boardedTripId !== trip.id ? (
+                                                <TouchableOpacity
+                                                    style={[styles.tripCardBookBtn, styles.tripCardBoardBtn]}
+                                                    onPress={handleConfirmBoarding}
+                                                    disabled={confirmingBoarding}
+                                                >
+                                                    {confirmingBoarding
+                                                        ? <ActivityIndicator size="small" color="#FFF" />
+                                                        : <Text style={styles.tripCardBookBtnText}>Confirmar subida</Text>
+                                                    }
+                                                </TouchableOpacity>
+                                            ) : (
+                                                <TouchableOpacity
+                                                    style={[
+                                                        styles.tripCardBookBtn,
+                                                        (trip.availableSeats === 0 || (!!myActiveBooking && !isMyBooked)) && styles.tripCardBookBtnDisabled,
+                                                        isMyBooked && styles.tripCardBookBtnBooked,
+                                                    ]}
+                                                    onPress={() => handleBookSeat(trip.id)}
+                                                    disabled={isBusy || trip.availableSeats === 0 || !!myActiveBooking}
+                                                >
+                                                    {isBusy
+                                                        ? <ActivityIndicator size="small" color="#FFF" />
+                                                        : <Text style={styles.tripCardBookBtnText}>
+                                                            {trip.availableSeats === 0 ? 'Lleno' : isMyBooked ? 'Reservado' : 'Solicitar'}
+                                                          </Text>
+                                                    }
+                                                </TouchableOpacity>
+                                            )}
                                         </View>
                                     </TouchableOpacity>
                                 );
@@ -1403,6 +1438,7 @@ const styles = StyleSheet.create({
     },
     tripCardBookBtnDisabled: { backgroundColor: '#CBD5E1' },
     tripCardBookBtnBooked: { backgroundColor: '#10B981' },
+    tripCardBoardBtn: { backgroundColor: '#8B5CF6' },
     tripCardBookBtnText: { fontSize: 13, fontWeight: '700', color: '#FFF' },
 
     // Mis Reservas button (in panel header)
