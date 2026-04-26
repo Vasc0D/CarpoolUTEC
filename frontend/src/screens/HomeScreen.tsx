@@ -607,8 +607,13 @@ export const HomeScreen = () => {
             );
         });
 
+        socket.on('trip_published', () => {
+            fetchStopsCoverage();
+            fetchTrips();
+        });
+
         return () => { socket.disconnect(); socketRef.current = null; };
-    }, [appMode, token]);
+    }, [appMode, token, fetchStopsCoverage, fetchTrips]);
 
     // ── Book seat ─────────────────────────────────────────────────────────────
     const handleBookSeat = async (tripId: string) => {

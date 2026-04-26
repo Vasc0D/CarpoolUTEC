@@ -40,4 +40,8 @@ export class NotificationsService {
   notifyDriverTripAutoCanceled(driverId: string, data: { tripId: string }) {
     this.notificationsGateway.server.to(driverId).emit('trip_auto_canceled', data);
   }
+
+  notifyTripPublished() {
+    this.notificationsGateway.server.emit('trip_published');
+  }
 }

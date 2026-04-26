@@ -81,7 +81,9 @@ export class TripsService {
       status: TripStatus.SCHEDULED,
     });
 
-    return this.tripsRepository.save(trip);
+    const saved = await this.tripsRepository.save(trip);
+    this.notificationsService.notifyTripPublished();
+    return saved;
   }
 
   async findAvailableTrips(lat: number, lng: number, destLat?: number, destLng?: number): Promise<any[]> {
