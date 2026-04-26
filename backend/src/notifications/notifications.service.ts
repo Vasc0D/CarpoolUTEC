@@ -32,4 +32,8 @@ export class NotificationsService {
   notifyPassengerNoShow(passengerId: string, data: any) {
     this.notificationsGateway.server.to(passengerId).emit('noShowUpdated', data);
   }
+
+  notifyDriverBookingCanceled(driverId: string, data: { bookingId: string; tripId: string; passengerName: string }) {
+    this.notificationsGateway.server.to(driverId).emit('booking_canceled', data);
+  }
 }

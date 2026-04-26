@@ -143,6 +143,25 @@ export const ProfileScreen = () => {
                 )}
             </View>
 
+            {/* ── Mis Reservas (pasajero) ──────────────────────────────── */}
+            <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Pasajero</Text>
+                <TouchableOpacity
+                    style={styles.historyCard}
+                    onPress={() => navigation.navigate('MyBookings')}
+                    activeOpacity={0.75}
+                >
+                    <View style={styles.historyIconWrap}>
+                        <Ionicons name="bookmark-outline" size={20} color="#0EA5E9" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                        <Text style={styles.historyTitle}>Mis Reservas</Text>
+                        <Text style={styles.historySubtitle}>Ver tus viajes reservados</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
+                </TouchableOpacity>
+            </View>
+
             {/* ── Historial de viajes (solo conductores) ─────────────── */}
             {isDriver && (
                 <View style={styles.section}>
