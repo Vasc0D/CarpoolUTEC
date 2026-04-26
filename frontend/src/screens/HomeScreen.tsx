@@ -195,59 +195,6 @@ const TripSheet: React.FC<TripSheetProps> = ({
                             </View>
                         </View>
 
-                        <View style={styles.priceMatchRow}>
-                            <View style={styles.priceTag}>
-                                <Ionicons name="cash-outline" size={14} color="#0EA5E9" />
-                                <Text style={styles.priceAmount}>
-                                    S/ {Number(trip.pricePerSeat ?? 0).toFixed(2)}
-                                </Text>
-                                {trip.matchType === 'near' && (
-                                    <View style={styles.discountHint}>
-                                        <Ionicons name="pricetag-outline" size={11} color="#16A34A" />
-                                        <Text style={styles.discountHintText}>más barato</Text>
-                                    </View>
-                                )}
-                            </View>
-                            {trip.matchType && (
-                                <View style={[
-                                    styles.matchBadge,
-                                    {
-                                        backgroundColor:
-                                            trip.matchType === 'exact' ? '#DCFCE7' :
-                                            trip.matchType === 'detour' ? '#FFF7ED' :
-                                            '#FEF9C3',
-                                    },
-                                ]}>
-                                    <Ionicons
-                                        name={
-                                            trip.matchType === 'exact' ? 'location' :
-                                            trip.matchType === 'detour' ? 'git-branch-outline' :
-                                            'navigate-outline'
-                                        }
-                                        size={12}
-                                        color={
-                                            trip.matchType === 'exact' ? '#16A34A' :
-                                            trip.matchType === 'detour' ? '#F97316' :
-                                            '#CA8A04'
-                                        }
-                                    />
-                                    <Text style={[
-                                        styles.matchBadgeText,
-                                        {
-                                            color:
-                                                trip.matchType === 'exact' ? '#16A34A' :
-                                                trip.matchType === 'detour' ? '#F97316' :
-                                                '#CA8A04',
-                                        },
-                                    ]}>
-                                        {trip.matchType === 'exact' ? 'Te deja ahí' :
-                                         trip.matchType === 'detour' ? `Se desvía ~${trip.detourMinutes}min` :
-                                         'Pasa cerca'}
-                                    </Text>
-                                </View>
-                            )}
-                        </View>
-
                         <View style={styles.infoRow}>
                             <View style={styles.infoCard}>
                                 <Ionicons name="people-outline" size={22} color="#0EA5E9" />
@@ -522,7 +469,7 @@ export const HomeScreen = () => {
     // Tick every 30s so "Iniciar Viaje" appears automatically when departure time arrives
     useEffect(() => {
         if (!activeDriverTrip || activeDriverTrip.status !== 'SCHEDULED') return;
-        const id = setInterval(() => setTick(t => t + 1), 30_000);
+        const id = setInterval(() => setTick(t => t + 1), 15_000);
         return () => clearInterval(id);
     }, [activeDriverTrip?.id, activeDriverTrip?.status]);
 
@@ -542,8 +489,9 @@ export const HomeScreen = () => {
 
     useFocusEffect(
         useCallback(() => {
-            if (appMode === 'driver') fetchActiveDriverTrip();
-        }, [appMode, fetchActiveDriverTrip])
+            fetchActiveDriverTrip();
+            setTick(t => t + 1);
+        }, [fetchActiveDriverTrip])
     );
 
     useEffect(() => {
@@ -577,6 +525,11 @@ export const HomeScreen = () => {
                     ? `${data.passengerName} se unió a tu viaje automáticamente.`
                     : `${data.passengerName} quiere unirse a tu viaje.`,
             );
+            fetchActiveDriverTrip();
+        });
+
+        socket.on('booking_canceled', (data: { bookingId: string; tripId: string; passengerName: string }) => {
+            Alert.alert('Pasajero canceló', `${data.passengerName} canceló su reserva.`);
             fetchActiveDriverTrip();
         });
 
@@ -943,22 +896,6 @@ export const HomeScreen = () => {
                                 </Text>
                             )}
                         </View>
-                        <TouchableOpacity
-                            style={[styles.myBookingsBtn, myActiveBooking && styles.myBookingsBtnActive]}
-                            onPress={() => navigation.navigate('MyBookings')}
-                            activeOpacity={0.8}
-                        >
-                            <Ionicons
-                                name={myActiveBooking ? 'bookmark' : 'bookmark-outline'}
-                                size={13}
-                                color={myActiveBooking ? '#0EA5E9' : '#64748B'}
-                            />
-                            <Text style={[styles.myBookingsBtnText, myActiveBooking && styles.myBookingsBtnTextActive]}>
-                                {myActiveBooking
-                                    ? myActiveBooking.status === 'ACCEPTED' ? 'Reserva confirmada' : 'Reserva pendiente'
-                                    : 'Mis Reservas'}
-                            </Text>
-                        </TouchableOpacity>
                     </View>
 
                     {loadingTrips ? (
@@ -1135,8 +1072,8 @@ export const HomeScreen = () => {
                                 ? (geocodedAddresses[destKey] ?? `${destLatVal!.toFixed(4)}, ${destLngVal!.toFixed(4)}`)
                                 : 'Destino';
                             return (
-                                <View style={[styles.driverTripFullOverlay, { paddingBottom: insets.bottom }]}>
-                                <View style={styles.driverTripCard}>
+                                <View style={styles.driverTripFullOverlay}>
+                                <View style={[styles.driverTripCard, { paddingBottom: insets.bottom }]}>
                                     {/* Header */}
                                     <View style={styles.driverTripCardHeader}>
                                         <Text style={styles.driverTripCardTitle}>Viaje publicado</Text>

@@ -165,7 +165,7 @@ export class BookingsService {
   async cancelBooking(bookingId: string, passengerId: string): Promise<BookingResponseDto> {
     const booking = await this.bookingsRepository.findOne({
       where: { id: bookingId },
-      relations: ['trip', 'passenger'],
+      relations: ['trip', 'trip.driver', 'passenger'],
     });
 
     if (!booking) throw new NotFoundException('Reserva no encontrada');
@@ -182,7 +182,15 @@ export class BookingsService {
       await this.tripsRepository.save(booking.trip);
     }
 
-    return this.mapToResponseDto(await this.bookingsRepository.save(booking));
+    const savedBooking = await this.bookingsRepository.save(booking);
+
+    this.notificationsService.notifyDriverBookingCanceled(booking.trip.driver.id, {
+      bookingId: savedBooking.id,
+      tripId: booking.trip.id,
+      passengerName: booking.passenger.name,
+    });
+
+    return this.mapToResponseDto(savedBooking);
   }
 
   async confirmBoarding(bookingId: string, passengerId: string): Promise<BookingResponseDto> {
