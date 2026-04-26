@@ -42,6 +42,11 @@ interface ActiveBooking {
     id: string;
     tripId: string;
     status: 'PENDING' | 'ACCEPTED';
+    departureTime?: string;
+    driver?: {
+        name: string;
+        vehicle?: { brand: string; model: string; color: string; plate: string } | null;
+    };
 }
 
 interface DriverTripSummary {
@@ -328,7 +333,13 @@ export const HomeScreen = () => {
         try {
             const { data } = await axiosClient.get('/bookings/me');
             const active = (data as any[]).find(b => b.status === 'PENDING' || b.status === 'ACCEPTED');
-            setMyActiveBooking(active ? { id: active.id, tripId: active.trip.id, status: active.status } : null);
+            setMyActiveBooking(active ? {
+                id: active.id,
+                tripId: active.trip.id,
+                status: active.status,
+                departureTime: active.trip.departureTime,
+                driver: active.trip.driver,
+            } : null);
         } catch {
             // silent
         }
@@ -492,8 +503,9 @@ export const HomeScreen = () => {
     useFocusEffect(
         useCallback(() => {
             fetchActiveDriverTrip();
+            fetchMyActiveBooking();
             setTick(t => t + 1);
-        }, [fetchActiveDriverTrip])
+        }, [fetchActiveDriverTrip, fetchMyActiveBooking])
     );
 
     useEffect(() => {
@@ -533,6 +545,11 @@ export const HomeScreen = () => {
         socket.on('booking_canceled', (data: { bookingId: string; tripId: string; passengerName: string }) => {
             Alert.alert('Pasajero canceló', `${data.passengerName} canceló su reserva.`);
             fetchActiveDriverTrip();
+        });
+
+        socket.on('trip_auto_canceled', () => {
+            Alert.alert('Viaje cancelado automáticamente', 'Tu viaje fue cancelado porque no tenía pasajeros confirmados al llegar la hora de salida.');
+            setActiveDriverTrip(null);
         });
 
         return () => { socket.disconnect(); socketRef.current = null; };
@@ -906,9 +923,11 @@ export const HomeScreen = () => {
                     <View style={styles.panelHeader}>
                         <View>
                             <Text style={styles.panelTitle}>
-                                {destLat !== null ? 'Resultados para destino' : 'Viajes disponibles'}
+                                {myActiveBooking
+                                    ? 'Viaje seleccionado'
+                                    : destLat !== null ? 'Resultados para destino' : 'Viajes disponibles'}
                             </Text>
-                            {!loadingTrips && destLat !== null && (
+                            {!myActiveBooking && !loadingTrips && destLat !== null && (
                                 <Text style={styles.panelSubtitle}>
                                     {trips.length} viaje{trips.length !== 1 ? 's' : ''} encontrado{trips.length !== 1 ? 's' : ''}
                                 </Text>
@@ -916,7 +935,93 @@ export const HomeScreen = () => {
                         </View>
                     </View>
 
-                    {loadingTrips ? (
+                    {myActiveBooking ? (
+                        /* ── Viaje seleccionado ───────────────────────────────────── */
+                        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.bookedTripContent}>
+                            {/* Driver card */}
+                            <View style={styles.bookedDriverCard}>
+                                <View style={styles.bookedDriverAvatar}>
+                                    <Text style={styles.bookedDriverAvatarText}>
+                                        {myActiveBooking.driver?.name?.[0]?.toUpperCase() ?? '?'}
+                                    </Text>
+                                </View>
+                                <View style={{ flex: 1 }}>
+                                    <Text style={styles.bookedDriverName}>
+                                        {myActiveBooking.driver?.name ?? 'Conductor'}
+                                    </Text>
+                                    {myActiveBooking.driver?.vehicle && (
+                                        <Text style={styles.bookedVehicleText}>
+                                            {myActiveBooking.driver.vehicle.brand} · {myActiveBooking.driver.vehicle.model} · {myActiveBooking.driver.vehicle.color} · {myActiveBooking.driver.vehicle.plate}
+                                        </Text>
+                                    )}
+                                </View>
+                                <View style={[
+                                    styles.bookedStatusBadge,
+                                    { backgroundColor: myActiveBooking.status === 'ACCEPTED' ? '#DCFCE7' : '#FEF3C7' },
+                                ]}>
+                                    <Ionicons
+                                        name={myActiveBooking.status === 'ACCEPTED' ? 'checkmark-circle-outline' : 'time-outline'}
+                                        size={13}
+                                        color={myActiveBooking.status === 'ACCEPTED' ? '#10B981' : '#F59E0B'}
+                                    />
+                                    <Text style={[
+                                        styles.bookedStatusText,
+                                        { color: myActiveBooking.status === 'ACCEPTED' ? '#10B981' : '#F59E0B' },
+                                    ]}>
+                                        {myActiveBooking.status === 'ACCEPTED' ? 'Confirmado' : 'Pendiente'}
+                                    </Text>
+                                </View>
+                            </View>
+
+                            {/* Departure time */}
+                            {myActiveBooking.departureTime && (
+                                <View style={styles.bookedTimeRow}>
+                                    <Ionicons name="time-outline" size={15} color="#64748B" />
+                                    <Text style={styles.bookedTimeText}>
+                                        Salida: {formatTime(myActiveBooking.departureTime)}
+                                    </Text>
+                                </View>
+                            )}
+
+                            {/* Confirm boarding — appears when accepted + departure time reached */}
+                            {myActiveBooking.status === 'ACCEPTED' &&
+                             myActiveBooking.departureTime &&
+                             tick >= 0 &&
+                             new Date() >= new Date(myActiveBooking.departureTime) &&
+                             boardedTripId !== myActiveBooking.tripId && (
+                                <TouchableOpacity
+                                    style={styles.bookedBoardBtn}
+                                    onPress={handleConfirmBoarding}
+                                    disabled={confirmingBoarding}
+                                    activeOpacity={0.85}
+                                >
+                                    {confirmingBoarding
+                                        ? <ActivityIndicator color="#FFF" />
+                                        : <>
+                                            <Ionicons name="car-outline" size={18} color="#FFF" />
+                                            <Text style={styles.bookedBoardBtnText}>Confirmar subida al auto</Text>
+                                          </>
+                                    }
+                                </TouchableOpacity>
+                            )}
+
+                            {/* Cancel booking */}
+                            <TouchableOpacity
+                                style={styles.cancelBookingBtn}
+                                onPress={() => handleCancelBooking(myActiveBooking.id)}
+                                disabled={cancelingBooking}
+                                activeOpacity={0.75}
+                            >
+                                {cancelingBooking
+                                    ? <ActivityIndicator size="small" color="#EF4444" />
+                                    : <>
+                                        <Ionicons name="close-circle-outline" size={16} color="#EF4444" />
+                                        <Text style={styles.cancelBookingBtnText}>Cancelar reserva</Text>
+                                      </>
+                                }
+                            </TouchableOpacity>
+                        </ScrollView>
+                    ) : loadingTrips ? (
                         <View style={styles.loadingPanel}>
                             <ActivityIndicator size="large" color="#0EA5E9" />
                             <Text style={styles.loadingPanelText}>Buscando viajes...</Text>
@@ -1273,21 +1378,25 @@ export const HomeScreen = () => {
                                         )}
                                     </ScrollView>
 
-                                    {/* Cancel */}
-                                    <TouchableOpacity
-                                        style={styles.driverTripCancelBtn}
-                                        onPress={() => handleCancelDriverTrip(activeDriverTrip.id)}
-                                        disabled={cancelingDriverTrip}
-                                        activeOpacity={0.75}
-                                    >
-                                        {cancelingDriverTrip
-                                            ? <ActivityIndicator size="small" color="#EF4444" />
-                                            : <>
-                                                <Ionicons name="close-circle-outline" size={16} color="#EF4444" />
-                                                <Text style={styles.driverTripCancelBtnText}>Cancelar viaje</Text>
-                                              </>
-                                        }
-                                    </TouchableOpacity>
+                                    {/* Cancel — only before departure time */}
+                                    {activeDriverTrip.status === 'SCHEDULED' &&
+                                     tick >= 0 &&
+                                     new Date() < new Date(activeDriverTrip.departureTime) && (
+                                        <TouchableOpacity
+                                            style={styles.driverTripCancelBtn}
+                                            onPress={() => handleCancelDriverTrip(activeDriverTrip.id)}
+                                            disabled={cancelingDriverTrip}
+                                            activeOpacity={0.75}
+                                        >
+                                            {cancelingDriverTrip
+                                                ? <ActivityIndicator size="small" color="#EF4444" />
+                                                : <>
+                                                    <Ionicons name="close-circle-outline" size={16} color="#EF4444" />
+                                                    <Text style={styles.driverTripCancelBtnText}>Cancelar viaje</Text>
+                                                  </>
+                                            }
+                                        </TouchableOpacity>
+                                    )}
                                 </View>
                                 </View>
                             );
@@ -1749,4 +1858,36 @@ const styles = StyleSheet.create({
         paddingHorizontal: 40, borderRadius: 14,
     },
     closeSuccessText: { color: '#FFF', fontSize: 16, fontWeight: '800' },
+
+    // Booked trip panel (passenger "Viaje seleccionado")
+    bookedTripContent: { padding: 16, gap: 12 },
+    bookedDriverCard: {
+        flexDirection: 'row', alignItems: 'center', gap: 12,
+        backgroundColor: '#F8FAFC', borderRadius: 16, padding: 14,
+        borderWidth: 1, borderColor: '#E2E8F0',
+    },
+    bookedDriverAvatar: {
+        width: 44, height: 44, borderRadius: 22,
+        backgroundColor: '#0F172A', justifyContent: 'center', alignItems: 'center',
+    },
+    bookedDriverAvatarText: { color: '#38BDF8', fontSize: 17, fontWeight: '800' },
+    bookedDriverName: { fontSize: 15, fontWeight: '700', color: '#0F172A' },
+    bookedVehicleText: { fontSize: 11, color: '#94A3B8', marginTop: 2 },
+    bookedStatusBadge: {
+        flexDirection: 'row', alignItems: 'center', gap: 4,
+        paddingHorizontal: 8, paddingVertical: 4, borderRadius: 20,
+    },
+    bookedStatusText: { fontSize: 11, fontWeight: '700' },
+    bookedTimeRow: {
+        flexDirection: 'row', alignItems: 'center', gap: 8,
+        paddingHorizontal: 4,
+    },
+    bookedTimeText: { fontSize: 13, color: '#64748B', fontWeight: '600' },
+    bookedBoardBtn: {
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+        backgroundColor: '#8B5CF6', paddingVertical: 14, borderRadius: 14,
+        shadowColor: '#8B5CF6', shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3, shadowRadius: 8, elevation: 6,
+    },
+    bookedBoardBtnText: { color: '#FFF', fontSize: 15, fontWeight: '800' },
 });
