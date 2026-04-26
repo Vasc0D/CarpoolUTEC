@@ -1265,25 +1265,71 @@ export const HomeScreen = () => {
                                     </View>
 
                                     <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 460 }}>
-                                        {/* Route visual */}
-                                        <View style={styles.driverTripRouteSection}>
-                                            <View style={styles.driverTripRouteDotCol}>
-                                                <View style={styles.driverTripOriginDot} />
-                                                <View style={{ flex: 1, alignItems: 'center', gap: 3, paddingVertical: 4 }}>
-                                                    {[0, 1, 2].map(i => (
-                                                        <View key={i} style={{ width: 2, height: 5, backgroundColor: '#CBD5E1', borderRadius: 1 }} />
+                                        {/* Route visual — origin + passenger drop-offs + destination */}
+                                        {(() => {
+                                            type RouteStop = { label: string; type: 'origin' | 'passenger' | 'dest'; names?: string };
+                                            const stops: RouteStop[] = [{ label: 'UTEC', type: 'origin' }];
+                                            const seen = new Set<string>();
+                                            for (const b of acceptedBookings) {
+                                                const bLat = b.destLat != null ? Number(b.destLat) : null;
+                                                const bLng = b.destLng != null ? Number(b.destLng) : null;
+                                                if (bLat != null && !isNaN(bLat) && bLng != null && !isNaN(bLng)) {
+                                                    const key = `${bLat.toFixed(5)},${bLng.toFixed(5)}`;
+                                                    if (!seen.has(key)) {
+                                                        seen.add(key);
+                                                        const addr = geocodedAddresses[key] ?? `${bLat.toFixed(4)}, ${bLng.toFixed(4)}`;
+                                                        const names = acceptedBookings
+                                                            .filter(ab => {
+                                                                const aLat = ab.destLat != null ? Number(ab.destLat) : null;
+                                                                const aLng = ab.destLng != null ? Number(ab.destLng) : null;
+                                                                return aLat != null && aLng != null &&
+                                                                       aLat.toFixed(5) === bLat!.toFixed(5) &&
+                                                                       aLng.toFixed(5) === bLng!.toFixed(5);
+                                                            })
+                                                            .map(ab => ab.passenger.name.split(' ')[0])
+                                                            .join(', ');
+                                                        stops.push({ label: addr, type: 'passenger', names });
+                                                    }
+                                                }
+                                            }
+                                            stops.push({ label: destAddress, type: 'dest' });
+                                            return (
+                                                <View style={[styles.driverTripRouteSection, { flexDirection: 'column' }]}>
+                                                    {stops.map((stop, i) => (
+                                                        <React.Fragment key={i}>
+                                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                                                                <View style={{ width: 12, alignItems: 'center' }}>
+                                                                    <View style={
+                                                                        stop.type === 'origin' ? styles.driverTripOriginDot :
+                                                                        stop.type === 'dest'   ? styles.driverTripDestDot :
+                                                                                                 styles.driverTripIntermediateDot
+                                                                    } />
+                                                                </View>
+                                                                <View style={{ flex: 1 }}>
+                                                                    {stop.type === 'passenger' && stop.names && (
+                                                                        <Text style={styles.driverTripIntermediateLabel}>
+                                                                            Baja: {stop.names}
+                                                                        </Text>
+                                                                    )}
+                                                                    <Text style={styles.driverTripRouteLabel} numberOfLines={2}>
+                                                                        {stop.label}
+                                                                    </Text>
+                                                                </View>
+                                                            </View>
+                                                            {i < stops.length - 1 && (
+                                                                <View style={{ flexDirection: 'row', gap: 12 }}>
+                                                                    <View style={{ width: 12, alignItems: 'center' }}>
+                                                                        {[0, 1, 2].map(j => (
+                                                                            <View key={j} style={{ width: 2, height: 5, backgroundColor: '#CBD5E1', borderRadius: 1, marginVertical: 1 }} />
+                                                                        ))}
+                                                                    </View>
+                                                                </View>
+                                                            )}
+                                                        </React.Fragment>
                                                     ))}
                                                 </View>
-                                                <View style={styles.driverTripDestDot} />
-                                            </View>
-                                            <View style={styles.driverTripRouteTextCol}>
-                                                <Text style={styles.driverTripRouteLabel}>UTEC</Text>
-                                                <View style={{ height: 16 }} />
-                                                <Text style={styles.driverTripRouteLabel} numberOfLines={2}>
-                                                    {destAddress}
-                                                </Text>
-                                            </View>
-                                        </View>
+                                            );
+                                        })()}
 
                                         {/* Stats */}
                                         <View style={styles.driverTripStatsDark}>
@@ -1359,13 +1405,28 @@ export const HomeScreen = () => {
                                                                 <Ionicons name="close" size={15} color="#DC2626" />
                                                             </TouchableOpacity>
                                                         </View>
+                                                    ) : b.status === 'ACCEPTED' ? (
+                                                        <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                                                            <View style={[styles.driverTripPassengerBadge, { backgroundColor: '#DCFCE7' }]}>
+                                                                <Text style={[styles.driverTripPassengerBadgeText, { color: '#16A34A' }]}>
+                                                                    Confirmado
+                                                                </Text>
+                                                            </View>
+                                                            <View style={[styles.driverTripPassengerBadge, {
+                                                                backgroundColor: b.isBoarded ? '#DBEAFE' : '#FEF3C7',
+                                                            }]}>
+                                                                <Text style={[styles.driverTripPassengerBadgeText, {
+                                                                    color: b.isBoarded ? '#2563EB' : '#B45309',
+                                                                }]}>
+                                                                    {b.isBoarded ? '✓ A bordo' : '⏳ Sin subir'}
+                                                                </Text>
+                                                            </View>
+                                                        </View>
                                                     ) : (
                                                         <View style={[
                                                             styles.driverTripPassengerBadge,
                                                             {
                                                                 backgroundColor:
-                                                                    b.isBoarded ? '#DBEAFE' :
-                                                                    b.status === 'ACCEPTED' ? '#DCFCE7' :
                                                                     b.status === 'COMPLETED' ? '#DBEAFE' : '#F1F5F9',
                                                             },
                                                         ]}>
@@ -1373,14 +1434,10 @@ export const HomeScreen = () => {
                                                                 styles.driverTripPassengerBadgeText,
                                                                 {
                                                                     color:
-                                                                        b.isBoarded ? '#2563EB' :
-                                                                        b.status === 'ACCEPTED' ? '#16A34A' :
                                                                         b.status === 'COMPLETED' ? '#2563EB' : '#64748B',
                                                                 },
                                                             ]}>
-                                                                {b.isBoarded ? 'A bordo' :
-                                                                 b.status === 'ACCEPTED' ? 'Confirmado' :
-                                                                 b.status === 'COMPLETED' ? 'Completado' : b.status}
+                                                                {b.status === 'COMPLETED' ? 'Completado' : b.status}
                                                             </Text>
                                                         </View>
                                                     )}
@@ -1680,6 +1737,12 @@ const styles = StyleSheet.create({
     },
     driverTripDestDot: {
         width: 10, height: 10, borderRadius: 5, backgroundColor: '#EF4444',
+    },
+    driverTripIntermediateDot: {
+        width: 8, height: 8, borderRadius: 4, backgroundColor: '#8B5CF6',
+    },
+    driverTripIntermediateLabel: {
+        fontSize: 10, fontWeight: '700' as const, color: '#8B5CF6', marginBottom: 1,
     },
     driverTripRouteLabel: { fontSize: 13, fontWeight: '600' as const, color: '#64748B' },
     driverTripMeta: {
