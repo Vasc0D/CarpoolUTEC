@@ -559,6 +559,18 @@ export const HomeScreen = () => {
             setActiveDriverTrip(null);
         });
 
+        socket.on('passengerBoarded', (data: { bookingId: string }) => {
+            setActiveDriverTrip(prev => {
+                if (!prev) return prev;
+                return {
+                    ...prev,
+                    bookings: prev.bookings.map(b =>
+                        b.id === data.bookingId ? { ...b, isBoarded: true } : b
+                    ),
+                };
+            });
+        });
+
         return () => { socket.disconnect(); socketRef.current = null; };
     }, [appMode, token]);
 
