@@ -59,6 +59,7 @@ interface DriverTripSummary {
     bookings: Array<{
         id: string;
         status: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'CANCELED' | 'COMPLETED';
+        isBoarded?: boolean;
         passenger: { id: string; name: string };
         destLat?: number;
         destLng?: number;
@@ -479,12 +480,18 @@ export const HomeScreen = () => {
         ).start();
     }, [pulseAnim]);
 
-    // Tick every 30s so "Iniciar Viaje" appears automatically when departure time arrives
+    // Tick every 15s — driver: re-evaluates "Iniciar Viaje"; passenger: re-evaluates "Confirmar subida"
     useEffect(() => {
         if (!activeDriverTrip || activeDriverTrip.status !== 'SCHEDULED') return;
         const id = setInterval(() => setTick(t => t + 1), 15_000);
         return () => clearInterval(id);
     }, [activeDriverTrip?.id, activeDriverTrip?.status]);
+
+    useEffect(() => {
+        if (appMode !== 'passenger' || !myActiveBooking) return;
+        const id = setInterval(() => setTick(t => t + 1), 15_000);
+        return () => clearInterval(id);
+    }, [appMode, myActiveBooking?.id]);
 
     useEffect(() => {
         if (appMode !== 'driver' || !activeDriverTrip?.routePolyline?.coordinates?.length) return;
@@ -1210,8 +1217,14 @@ export const HomeScreen = () => {
                             const acceptedCount = activeBookings.filter(b => b.status === 'ACCEPTED').length;
                             const totalSeats = acceptedCount + activeDriverTrip.availableSeats;
                             const now = tick >= 0 ? new Date() : new Date();
+                            const departureMs = new Date(activeDriverTrip.departureTime).getTime();
+                            const minutesLate = (now.getTime() - departureMs) / 60_000;
+                            const acceptedBookings = activeDriverTrip.bookings.filter(b => b.status === 'ACCEPTED');
+                            const allBoarded = acceptedBookings.length > 0 && acceptedBookings.every(b => b.isBoarded);
+                            const graceExpired = minutesLate >= 5;
                             const canStart = activeDriverTrip.status === 'SCHEDULED' &&
-                                now >= new Date(activeDriverTrip.departureTime);
+                                minutesLate >= 0 &&
+                                (allBoarded || graceExpired);
                             const destCoords = activeDriverTrip.routePolyline?.coordinates;
                             const destLatVal = destCoords?.length ? destCoords[destCoords.length - 1][1] : null;
                             const destLngVal = destCoords?.length ? destCoords[destCoords.length - 1][0] : null;
@@ -1334,6 +1347,7 @@ export const HomeScreen = () => {
                                                             styles.driverTripPassengerBadge,
                                                             {
                                                                 backgroundColor:
+                                                                    b.isBoarded ? '#DBEAFE' :
                                                                     b.status === 'ACCEPTED' ? '#DCFCE7' :
                                                                     b.status === 'COMPLETED' ? '#DBEAFE' : '#F1F5F9',
                                                             },
@@ -1342,11 +1356,13 @@ export const HomeScreen = () => {
                                                                 styles.driverTripPassengerBadgeText,
                                                                 {
                                                                     color:
+                                                                        b.isBoarded ? '#2563EB' :
                                                                         b.status === 'ACCEPTED' ? '#16A34A' :
                                                                         b.status === 'COMPLETED' ? '#2563EB' : '#64748B',
                                                                 },
                                                             ]}>
-                                                                {b.status === 'ACCEPTED' ? 'Confirmado' :
+                                                                {b.isBoarded ? 'A bordo' :
+                                                                 b.status === 'ACCEPTED' ? 'Confirmado' :
                                                                  b.status === 'COMPLETED' ? 'Completado' : b.status}
                                                             </Text>
                                                         </View>
@@ -1356,6 +1372,16 @@ export const HomeScreen = () => {
                                         })}
 
                                         {/* Iniciar / Finalizar */}
+                                        {minutesLate >= 0 && !canStart && acceptedBookings.length > 0 && (
+                                            <View style={styles.waitingBoardingRow}>
+                                                <Ionicons name="time-outline" size={15} color="#F59E0B" />
+                                                <Text style={styles.waitingBoardingText}>
+                                                    {graceExpired
+                                                        ? 'Puedes iniciar aunque falten pasajeros'
+                                                        : `Esperando que todos suban al auto (${Math.ceil(5 - minutesLate)} min restantes para poder iniciar)`}
+                                                </Text>
+                                            </View>
+                                        )}
                                         {canStart && (
                                             <TouchableOpacity
                                                 style={[styles.driverTripActionBtn, { backgroundColor: '#0EA5E9' }]}
@@ -1900,4 +1926,14 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.3, shadowRadius: 8, elevation: 6,
     },
     bookedBoardBtnText: { color: '#FFF', fontSize: 15, fontWeight: '800' },
+
+    // Waiting boarding message
+    waitingBoardingRow: {
+        flexDirection: 'row' as const, alignItems: 'flex-start' as const, gap: 8,
+        backgroundColor: '#FFFBEB', borderRadius: 12,
+        paddingVertical: 10, paddingHorizontal: 14,
+        marginHorizontal: 16, marginTop: 6,
+        borderWidth: 1, borderColor: '#FDE68A',
+    },
+    waitingBoardingText: { flex: 1, fontSize: 12, color: '#92400E', fontWeight: '600' as const, lineHeight: 17 },
 });
