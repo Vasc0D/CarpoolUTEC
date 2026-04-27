@@ -29,6 +29,7 @@ interface TripMarker {
     routePolyline: { coordinates: number[][] };
     pricePerSeat: number;
     originalDurationSeconds?: number;
+    legDurationsSeconds?: number[] | null;
     distanceToDestination?: number;
     matchType?: 'exact' | 'near' | 'detour';
     detourMinutes?: number;
@@ -44,7 +45,7 @@ interface ActiveBooking {
     tripId: string;
     status: 'PENDING' | 'ACCEPTED';
     departureTime?: string;
-    originalDurationSeconds?: number;
+    passengerEtaSeconds?: number;
     destLat?: number;
     destLng?: number;
     driver?: {
@@ -59,7 +60,8 @@ interface DriverTripSummary {
     status: 'SCHEDULED' | 'ACTIVE';
     availableSeats: number;
     pricePerSeat: number;
-    originalDurationSeconds?: number;
+    legDurationsSeconds?: number[] | null;
+    passengerWaypoints?: { passengerId: string; lat: number; lng: number }[] | null;
     routePolyline?: { coordinates: number[][] };
     bookings: Array<{
         id: string;
@@ -226,9 +228,12 @@ const TripSheet: React.FC<TripSheetProps> = ({
                             <View style={styles.infoCard}>
                                 <Ionicons name="flag-outline" size={22} color="#10B981" />
                                 <Text style={styles.infoValue}>
-                                    {formatETA(trip.departureTime, trip.originalDurationSeconds) || '--:--'}
+                                    {formatETA(trip.departureTime,
+                                        trip.legDurationsSeconds?.reduce((a, b) => a + b, 0)
+                                        ?? trip.originalDurationSeconds
+                                    ) || '--:--'}
                                 </Text>
-                                <Text style={styles.infoLabel}>Llegada est.</Text>
+                                <Text style={styles.infoLabel}>Llegada final</Text>
                             </View>
                         </View>
 
@@ -359,7 +364,7 @@ export const HomeScreen = () => {
                 tripId: active.trip.id,
                 status: active.status,
                 departureTime: active.trip.departureTime,
-                originalDurationSeconds: active.trip.originalDurationSeconds ?? undefined,
+                passengerEtaSeconds: active.trip.passengerEtaSeconds ?? undefined,
                 driver: active.trip.driver,
                 destLat: active.destLat ?? undefined,
                 destLng: active.destLng ?? undefined,
@@ -593,14 +598,12 @@ export const HomeScreen = () => {
             const last = coords[coords.length - 1];
             toGeocode.push([last[1], last[0]]);
         }
-        for (const b of activeDriverTrip.bookings) {
-            const bLat = b.destLat != null ? Number(b.destLat) : null;
-            const bLng = b.destLng != null ? Number(b.destLng) : null;
-            if (bLat != null && !isNaN(bLat) && bLng != null && !isNaN(bLng)) toGeocode.push([bLat, bLng]);
+        // P-2: geocode passengerWaypoints for ordered stop addresses in driver panel
+        for (const wp of (activeDriverTrip.passengerWaypoints ?? [])) {
+            toGeocode.push([Number(wp.lat), Number(wp.lng)]);
         }
-        // P-2: no cache wipe — reverseGeocode checks geocodedKeysRef and skips already-fetched keys
         toGeocode.forEach(([lat, lng]) => reverseGeocode(lat, lng));
-    }, [activeDriverTrip?.id, activeDriverTrip?.bookings?.length, reverseGeocode]);
+    }, [activeDriverTrip?.id, activeDriverTrip?.passengerWaypoints?.length, reverseGeocode]);
 
     // ── Driver socket ─────────────────────────────────────────────────────────
     useEffect(() => {
@@ -727,7 +730,7 @@ export const HomeScreen = () => {
                 tripId,
                 status: data.status === 'ACCEPTED' ? 'ACCEPTED' : 'PENDING',
                 departureTime: bookedTrip?.departureTime,
-                originalDurationSeconds: bookedTrip?.originalDurationSeconds,
+                passengerEtaSeconds: data.trip?.passengerEtaSeconds ?? undefined,
                 destLat: destLat ?? undefined,
                 destLng: destLng ?? undefined,
                 driver: bookedTrip?.driver ? {
@@ -1118,11 +1121,11 @@ export const HomeScreen = () => {
                                     </Text>
                                 </View>
                             )}
-                            {myActiveBooking.departureTime && myActiveBooking.originalDurationSeconds ? (
+                            {myActiveBooking.departureTime && myActiveBooking.passengerEtaSeconds ? (
                                 <View style={styles.bookedTimeRow}>
                                     <Ionicons name="flag-outline" size={15} color="#10B981" />
                                     <Text style={[styles.bookedTimeText, { color: '#10B981' }]}>
-                                        Llegada est.: {formatETA(myActiveBooking.departureTime, myActiveBooking.originalDurationSeconds)}
+                                        Tu parada: {formatETA(myActiveBooking.departureTime, myActiveBooking.passengerEtaSeconds)}
                                     </Text>
                                 </View>
                             ) : null}
@@ -1266,14 +1269,20 @@ export const HomeScreen = () => {
                                                     {formatTime(trip.departureTime)}
                                                 </Text>
                                             </View>
-                                            {!!formatETA(trip.departureTime, trip.originalDurationSeconds) && (
-                                                <View style={styles.tripCardInfoItem}>
-                                                    <Ionicons name="flag-outline" size={13} color="#10B981" />
-                                                    <Text style={[styles.tripCardInfoText, { color: '#10B981' }]}>
-                                                        ~{formatETA(trip.departureTime, trip.originalDurationSeconds)}
-                                                    </Text>
-                                                </View>
-                                            )}
+                                            {(() => {
+                                                const eta = formatETA(trip.departureTime,
+                                                    trip.legDurationsSeconds?.reduce((a, b) => a + b, 0)
+                                                    ?? trip.originalDurationSeconds
+                                                );
+                                                return eta ? (
+                                                    <View style={styles.tripCardInfoItem}>
+                                                        <Ionicons name="flag-outline" size={13} color="#10B981" />
+                                                        <Text style={[styles.tripCardInfoText, { color: '#10B981' }]}>
+                                                            ~{eta}
+                                                        </Text>
+                                                    </View>
+                                                ) : null;
+                                            })()}
                                             <View style={styles.tripCardInfoItem}>
                                                 <Ionicons name="people-outline" size={13} color="#64748B" />
                                                 <Text style={styles.tripCardInfoText}>
@@ -1394,34 +1403,41 @@ export const HomeScreen = () => {
                                     </View>
 
                                     <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 460 }}>
-                                        {/* Route visual — origin + passenger drop-offs + destination */}
+                                        {/* Route visual — origin + passenger drop-offs (with ETAs) + destination */}
                                         {(() => {
-                                            type RouteStop = { label: string; type: 'origin' | 'passenger' | 'dest'; names?: string };
-                                            const stops: RouteStop[] = [{ label: 'UTEC', type: 'origin' }];
-                                            const seen = new Set<string>();
-                                            for (const b of acceptedBookings) {
-                                                const bLat = b.destLat != null ? Number(b.destLat) : null;
-                                                const bLng = b.destLng != null ? Number(b.destLng) : null;
-                                                if (bLat != null && !isNaN(bLat) && bLng != null && !isNaN(bLng)) {
-                                                    const key = `${bLat.toFixed(5)},${bLng.toFixed(5)}`;
-                                                    if (!seen.has(key)) {
-                                                        seen.add(key);
-                                                        const addr = geocodedAddresses[key] ?? `${bLat.toFixed(4)}, ${bLng.toFixed(4)}`;
-                                                        const names = acceptedBookings
-                                                            .filter(ab => {
-                                                                const aLat = ab.destLat != null ? Number(ab.destLat) : null;
-                                                                const aLng = ab.destLng != null ? Number(ab.destLng) : null;
-                                                                return aLat != null && aLng != null &&
-                                                                       aLat.toFixed(5) === bLat!.toFixed(5) &&
-                                                                       aLng.toFixed(5) === bLng!.toFixed(5);
-                                                            })
-                                                            .map(ab => ab.passenger.name.split(' ')[0])
-                                                            .join(', ');
-                                                        stops.push({ label: addr, type: 'passenger', names });
-                                                    }
-                                                }
+                                            type RouteStop = { label: string; type: 'origin' | 'passenger' | 'dest'; names?: string; eta?: string };
+                                            const legDurs = activeDriverTrip.legDurationsSeconds ?? [];
+                                            const pWaypoints = activeDriverTrip.passengerWaypoints ?? [];
+                                            const departure = new Date(activeDriverTrip.departureTime);
+
+                                            // Build cumulative milliseconds per waypoint index
+                                            const stops: RouteStop[] = [{ label: 'UTEC', type: 'origin', eta: formatTime(activeDriverTrip.departureTime) }];
+                                            const seenKeys = new Set<string>();
+                                            let cumMs = 0;
+
+                                            for (let i = 0; i < pWaypoints.length; i++) {
+                                                cumMs += (legDurs[i] ?? 0) * 1000;
+                                                const wp = pWaypoints[i];
+                                                const key = `${Number(wp.lat).toFixed(5)},${Number(wp.lng).toFixed(5)}`;
+                                                if (seenKeys.has(key)) continue;
+                                                seenKeys.add(key);
+                                                const addr = geocodedAddresses[key] ?? `${Number(wp.lat).toFixed(4)}, ${Number(wp.lng).toFixed(4)}`;
+                                                const etaStr = new Date(departure.getTime() + cumMs)
+                                                    .toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
+                                                const names = pWaypoints
+                                                    .filter(pw => `${Number(pw.lat).toFixed(5)},${Number(pw.lng).toFixed(5)}` === key)
+                                                    .map(pw => acceptedBookings.find(ab => ab.passenger.id === pw.passengerId)?.passenger.name.split(' ')[0])
+                                                    .filter(Boolean)
+                                                    .join(', ');
+                                                stops.push({ label: addr, type: 'passenger', names, eta: etaStr });
                                             }
-                                            stops.push({ label: destAddress, type: 'dest' });
+
+                                            const totalMs = legDurs.reduce((a, b) => a + b, 0) * 1000;
+                                            const finalEta = totalMs > 0
+                                                ? new Date(departure.getTime() + totalMs).toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' })
+                                                : undefined;
+                                            stops.push({ label: destAddress, type: 'dest', eta: finalEta });
+
                                             return (
                                                 <View style={[styles.driverTripRouteSection, { flexDirection: 'column' }]}>
                                                     {stops.map((stop, i) => (
@@ -1444,6 +1460,11 @@ export const HomeScreen = () => {
                                                                         {stop.label}
                                                                     </Text>
                                                                 </View>
+                                                                {stop.eta && (
+                                                                    <View style={styles.stopEtaBadge}>
+                                                                        <Text style={styles.stopEtaText}>{stop.eta}</Text>
+                                                                    </View>
+                                                                )}
                                                             </View>
                                                             {i < stops.length - 1 && (
                                                                 <View style={{ flexDirection: 'row', gap: 12 }}>
@@ -1470,9 +1491,11 @@ export const HomeScreen = () => {
                                             </View>
                                             <View style={styles.driverTripStatDark}>
                                                 <Text style={styles.driverTripStatDarkValue}>
-                                                    {formatETA(activeDriverTrip.departureTime, activeDriverTrip.originalDurationSeconds) || '--:--'}
+                                                    {formatETA(activeDriverTrip.departureTime,
+                                                        activeDriverTrip.legDurationsSeconds?.reduce((a, b) => a + b, 0)
+                                                    ) || '--:--'}
                                                 </Text>
-                                                <Text style={styles.driverTripStatDarkLabel}>Llegada est.</Text>
+                                                <Text style={styles.driverTripStatDarkLabel}>Llegada final</Text>
                                             </View>
                                             <View style={styles.driverTripStatDark}>
                                                 <Text style={styles.driverTripStatDarkValue}>
@@ -1875,6 +1898,11 @@ const styles = StyleSheet.create({
         fontSize: 10, fontWeight: '700' as const, color: '#8B5CF6', marginBottom: 1,
     },
     driverTripRouteLabel: { fontSize: 13, fontWeight: '600' as const, color: '#64748B' },
+    stopEtaBadge: {
+        backgroundColor: '#EFF6FF', paddingHorizontal: 8, paddingVertical: 3,
+        borderRadius: 10, alignSelf: 'flex-start' as const,
+    },
+    stopEtaText: { fontSize: 11, fontWeight: '700' as const, color: '#0EA5E9' },
     driverTripMeta: {
         flexDirection: 'row',
         gap: 14,

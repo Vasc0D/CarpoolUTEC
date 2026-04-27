@@ -22,7 +22,7 @@ interface MyBooking {
     trip: {
         id: string;
         departureTime: string;
-        originalDurationSeconds?: number;
+        passengerEtaSeconds?: number;
         driver: {
             id: string;
             name: string;
@@ -95,9 +95,9 @@ const BookingCard: React.FC<BookingCardProps> = ({ booking }) => {
                         </Text>
                     )}
                     <Text style={styles.cardTime}>{formatDateTime(booking.trip.departureTime)}</Text>
-                    {!!formatETA(booking.trip.departureTime, booking.trip.originalDurationSeconds) && (
+                    {!!formatETA(booking.trip.departureTime, booking.trip.passengerEtaSeconds) && (
                         <Text style={[styles.cardTime, { color: '#10B981' }]}>
-                            Llegada est.: {formatETA(booking.trip.departureTime, booking.trip.originalDurationSeconds)}
+                            Tu parada: {formatETA(booking.trip.departureTime, booking.trip.passengerEtaSeconds)}
                         </Text>
                     )}
                 </View>

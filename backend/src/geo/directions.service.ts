@@ -14,6 +14,7 @@ export class DirectionsService {
   async getRoute(waypoints: { lat: number; lng: number }[], departureTime?: Date): Promise<{
     polylinePoints: [number, number][];
     durationSeconds: number;
+    legDurations: number[];
   }> {
     if (waypoints.length < 2) throw new Error('Se necesitan al menos 2 puntos');
 
@@ -49,10 +50,14 @@ export class DirectionsService {
     }
 
     const route = data.routes[0];
-    const durationSeconds: number = route.legs.reduce((acc: number, l: any) => acc + l.duration.value, 0);
+    // Use duration_in_traffic when available (requires departure_time), else fall back to duration
+    const legDurations: number[] = route.legs.map((l: any) =>
+      l.duration_in_traffic?.value ?? l.duration.value,
+    );
+    const durationSeconds = legDurations.reduce((a, b) => a + b, 0);
     const polylinePoints = this.decodePolyline(route.overview_polyline.points);
 
-    return { polylinePoints, durationSeconds };
+    return { polylinePoints, durationSeconds, legDurations };
   }
 
   private decodePolyline(encoded: string): [number, number][] {

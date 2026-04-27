@@ -73,11 +73,13 @@ export class TripsService {
 
     let finalRoute = createTripDto.route;
     let originalDurationSeconds = 0;
+    let legDurationsSeconds: number[] | null = null;
 
     try {
-      const { polylinePoints, durationSeconds } = await this.directionsService.getRoute([origin, destination], new Date(createTripDto.departureTime));
+      const { polylinePoints, durationSeconds, legDurations } = await this.directionsService.getRoute([origin, destination], new Date(createTripDto.departureTime));
       finalRoute = polylinePoints;
       originalDurationSeconds = durationSeconds;
+      legDurationsSeconds = legDurations;
     } catch (e) {
       this.logger.warn(`DirectionsService falló al crear viaje, usando ruta del frontend: ${e.message}`);
     }
@@ -93,6 +95,7 @@ export class TripsService {
       meetingPoint: createTripDto.meetingPoint,
       detourEnabled: createTripDto.detourEnabled ?? false,
       originalDurationSeconds,
+      legDurationsSeconds,
       status: TripStatus.SCHEDULED,
     });
 

@@ -9,7 +9,7 @@ export class BookingResponseDto {
     trip: {
         id: string;
         departureTime: Date;
-        originalDurationSeconds: number;
+        passengerEtaSeconds: number;
         driver: {
             id: string;
             name: string;

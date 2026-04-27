@@ -40,6 +40,9 @@ export class Trip {
   @Column({ type: 'json', nullable: true })
   passengerWaypoints: { passengerId: string; lat: number; lng: number }[] | null;
 
+  @Column({ type: 'json', nullable: true })
+  legDurationsSeconds: number[] | null;
+
   // B-1: index for cron jobs and availability queries that filter by departureTime
   @Index()
   @Column({ type: 'timestamp' })

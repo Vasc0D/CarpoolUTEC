@@ -19,10 +19,11 @@ type ActiveTripRouteProp = RouteProp<RootStackParamList, 'ActiveTrip'>;
 interface TripDetail {
     id: string;
     departureTime: string;
-    originalDurationSeconds?: number;
     meetingPoint: string | null;
     driver: { id: string; name: string };
     routePolyline: { coordinates: number[][] } | null;
+    legDurationsSeconds?: number[] | null;
+    passengerWaypoints?: { passengerId: string; lat: number; lng: number }[] | null;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -30,11 +31,6 @@ interface TripDetail {
 const formatTime = (iso: string) =>
     new Date(iso).toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
 
-const formatETA = (departureTime: string, durationSeconds?: number): string => {
-    if (!durationSeconds) return '';
-    const eta = new Date(new Date(departureTime).getTime() + durationSeconds * 1000);
-    return eta.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
-};
 
 const UTEC_COORDS = { latitude: -12.135, longitude: -77.023 };
 
@@ -44,7 +40,7 @@ export const ActiveTripScreen = () => {
     const navigation = useNavigation<any>();
     const route = useRoute<ActiveTripRouteProp>();
     const { tripId } = route.params;
-    const { token } = useAuthStore();
+    const { token, user } = useAuthStore();
     const insets = useSafeAreaInsets();
     const mapRef = useRef<MapView>(null);
     const socketRef = useRef<Socket | null>(null);
@@ -100,6 +96,26 @@ export const ActiveTripScreen = () => {
     const routeCoords = trip?.routePolyline?.coordinates.map((c: number[]) => ({
         latitude: c[1], longitude: c[0],
     })) ?? [];
+
+    // Compute passenger-specific ETA (their drop-off stop) and final destination ETA
+    const { myDropOffEta, finalEta } = (() => {
+        if (!trip?.legDurationsSeconds?.length || !trip.departureTime) return { myDropOffEta: null, finalEta: null };
+        const legDurs = trip.legDurationsSeconds;
+        const departure = new Date(trip.departureTime);
+        const totalMs = legDurs.reduce((a, b) => a + b, 0) * 1000;
+        const finalEtaDate = new Date(departure.getTime() + totalMs);
+        const finalEta = finalEtaDate.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
+
+        const waypoints = trip.passengerWaypoints ?? [];
+        const stopIdx = user?.id ? waypoints.findIndex(w => w.passengerId === user.id) : -1;
+        if (stopIdx >= 0) {
+            const cumMs = legDurs.slice(0, stopIdx + 1).reduce((a, b) => a + b, 0) * 1000;
+            const myEtaDate = new Date(departure.getTime() + cumMs);
+            const myDropOffEta = myEtaDate.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
+            return { myDropOffEta, finalEta };
+        }
+        return { myDropOffEta: null, finalEta };
+    })();
 
     const handleOpenNavigation = async () => {
         const coords = trip?.routePolyline?.coordinates;
@@ -182,11 +198,19 @@ export const ActiveTripScreen = () => {
                                 <Ionicons name="time-outline" size={13} color="#0EA5E9" />
                                 <Text style={styles.timeText}>{formatTime(trip.departureTime)}</Text>
                             </View>
-                            {!!formatETA(trip.departureTime, trip.originalDurationSeconds) && (
+                            {myDropOffEta && (
+                                <View style={[styles.timeBadge, { backgroundColor: '#F3E8FF' }]}>
+                                    <Ionicons name="location-outline" size={13} color="#8B5CF6" />
+                                    <Text style={[styles.timeText, { color: '#8B5CF6' }]}>
+                                        Tu bajada: {myDropOffEta}
+                                    </Text>
+                                </View>
+                            )}
+                            {finalEta && (
                                 <View style={[styles.timeBadge, { backgroundColor: '#ECFDF5' }]}>
                                     <Ionicons name="flag-outline" size={13} color="#10B981" />
                                     <Text style={[styles.timeText, { color: '#10B981' }]}>
-                                        ~{formatETA(trip.departureTime, trip.originalDurationSeconds)}
+                                        Llegada final: {finalEta}
                                     </Text>
                                 </View>
                             )}

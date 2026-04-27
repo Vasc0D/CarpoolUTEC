@@ -141,12 +141,13 @@ export class BookingsService {
       const existingWaypoints = (trip.passengerWaypoints ?? []).map(w => ({ lat: w.lat, lng: w.lng }));
       const allWaypoints = [origin, ...existingWaypoints, { lat: destLat, lng: destLng }, finalDest];
 
-      const { polylinePoints } = await this.directionsService.getRoute(allWaypoints, new Date(trip.departureTime));
+      const { polylinePoints, legDurations } = await this.directionsService.getRoute(allWaypoints, new Date(trip.departureTime));
       trip.routePolyline = this.geoService.createLineString(polylinePoints);
       trip.passengerWaypoints = [
         ...(trip.passengerWaypoints ?? []),
         { passengerId, lat: destLat, lng: destLng },
       ];
+      trip.legDurationsSeconds = legDurations;
       await this.tripsRepository.save(trip);
     } catch (e) {
       this.logger.error(`Error recalculando ruta para viaje ${trip.id}: ${e.message}`);
@@ -163,9 +164,10 @@ export class BookingsService {
       const finalDest = { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
       const waypointList = [origin, ...remainingWaypoints.map(w => ({ lat: w.lat, lng: w.lng })), finalDest];
 
-      const { polylinePoints } = await this.directionsService.getRoute(waypointList, new Date(trip.departureTime));
+      const { polylinePoints, legDurations } = await this.directionsService.getRoute(waypointList, new Date(trip.departureTime));
       trip.routePolyline = this.geoService.createLineString(polylinePoints);
       trip.passengerWaypoints = remainingWaypoints;
+      trip.legDurationsSeconds = legDurations;
       await this.tripsRepository.save(trip);
     } catch (e) {
       this.logger.error(`Error eliminando parada tras cancelación en viaje ${trip.id}: ${e.message}`);
@@ -308,6 +310,16 @@ export class BookingsService {
   }
 
   private mapToResponseDto(booking: Booking): BookingResponseDto {
+    const legDurs = booking.trip.legDurationsSeconds ?? [];
+    const totalSeconds = legDurs.length > 0
+      ? legDurs.reduce((a, b) => a + b, 0)
+      : booking.trip.originalDurationSeconds;
+    const waypoints = booking.trip.passengerWaypoints ?? [];
+    const stopIdx = waypoints.findIndex(w => w.passengerId === booking.passenger?.id);
+    const passengerEtaSeconds = stopIdx >= 0 && legDurs.length > 0
+      ? legDurs.slice(0, stopIdx + 1).reduce((a, b) => a + b, 0)
+      : totalSeconds;
+
     return {
       id: booking.id,
       status: booking.status,
@@ -317,7 +329,7 @@ export class BookingsService {
       trip: {
         id: booking.trip.id,
         departureTime: booking.trip.departureTime,
-        originalDurationSeconds: booking.trip.originalDurationSeconds,
+        passengerEtaSeconds,
         driver: {
           id: booking.trip.driver?.id,
           name: booking.trip.driver?.name,
