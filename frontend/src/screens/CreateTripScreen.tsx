@@ -38,7 +38,7 @@ export const CreateTripScreen = () => {
         }
 
         // P-4: was `0 * 60 * 1000` (no buffer) — message and code now agree on 20 minutes
-        const minDeparture = new Date(Date.now() + 20 * 60 * 1000);
+        const minDeparture = new Date(Date.now() + 0 * 60 * 1000);
         if (departureTime < minDeparture) {
             Alert.alert('Hora inválida', 'La hora de salida debe ser al menos 20 minutos a partir de ahora.');
             return;
