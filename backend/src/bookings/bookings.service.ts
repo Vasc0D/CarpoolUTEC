@@ -88,7 +88,12 @@ export class BookingsService {
       autoAccepted: isAutoAccept,
     });
 
-    return this.mapToResponseDto(savedBooking);
+    // Reload with fresh trip relations so mapToResponseDto sees updated passengerWaypoints/legDurationsSeconds
+    const freshBooking = await this.bookingsRepository.findOne({
+      where: { id: savedBooking.id },
+      relations: ['trip', 'trip.driver', 'trip.driver.vehicle', 'passenger'],
+    });
+    return this.mapToResponseDto(freshBooking ?? savedBooking);
   }
 
   async acceptBooking(bookingId: string, driverId: string): Promise<BookingResponseDto> {
@@ -128,7 +133,12 @@ export class BookingsService {
       status: 'ACCEPTED', // narrowed literal — we just set this status above
     });
 
-    return this.mapToResponseDto(savedBooking);
+    // Reload with fresh trip relations so mapToResponseDto sees updated passengerWaypoints/legDurationsSeconds
+    const freshBooking = await this.bookingsRepository.findOne({
+      where: { id: savedBooking.id },
+      relations: ['trip', 'trip.driver', 'trip.driver.vehicle', 'passenger'],
+    });
+    return this.mapToResponseDto(freshBooking ?? savedBooking);
   }
 
   private async recalculateRoute(trip: Trip, passengerId: string, destLat: number, destLng: number): Promise<void> {
