@@ -243,15 +243,20 @@ export const CreateTripScreen = () => {
                                     </Text>
                                 </View>
                                 {detourEnabled && (
-                                    <View style={[styles.counter, { marginTop: 8 }]}>
-                                        <TouchableOpacity onPress={() => setDetour(Math.max(5, detour - 5))}>
-                                            <Ionicons name="remove-circle-outline" size={32} color="#64748B" />
-                                        </TouchableOpacity>
-                                        <Text style={styles.counterText}>{detour}</Text>
-                                        <TouchableOpacity onPress={() => setDetour(Math.min(30, detour + 5))}>
-                                            <Ionicons name="add-circle-outline" size={32} color="#64748B" />
-                                        </TouchableOpacity>
-                                    </View>
+                                    <>
+                                        <Text style={styles.detourHint}>
+                                            Selecciona el tiempo extra máx. con respecto a tu ruta normal que aceptas
+                                        </Text>
+                                        <View style={[styles.counter, { marginTop: 6 }]}>
+                                            <TouchableOpacity onPress={() => setDetour(Math.max(5, detour - 5))}>
+                                                <Ionicons name="remove-circle-outline" size={32} color="#64748B" />
+                                            </TouchableOpacity>
+                                            <Text style={styles.counterText}>{detour}</Text>
+                                            <TouchableOpacity onPress={() => setDetour(Math.min(30, detour + 5))}>
+                                                <Ionicons name="add-circle-outline" size={32} color="#64748B" />
+                                            </TouchableOpacity>
+                                        </View>
+                                    </>
                                 )}
                             </View>
                         </View>
@@ -414,5 +419,11 @@ const styles = StyleSheet.create({
         fontSize: 14,
         fontWeight: '700',
         color: '#1E293B',
+    },
+    detourHint: {
+        fontSize: 11,
+        color: '#64748B',
+        marginTop: 6,
+        lineHeight: 15,
     },
 });

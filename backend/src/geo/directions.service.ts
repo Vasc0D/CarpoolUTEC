@@ -15,15 +15,13 @@ export class DirectionsService {
     polylinePoints: [number, number][];
     durationSeconds: number;
     legDurations: number[];
+    waypointOrder: number[];
   }> {
     if (waypoints.length < 2) throw new Error('Se necesitan al menos 2 puntos');
 
     const origin = `${waypoints[0].lat},${waypoints[0].lng}`;
     const destination = `${waypoints[waypoints.length - 1].lat},${waypoints[waypoints.length - 1].lng}`;
-    const intermediates = waypoints
-      .slice(1, -1)
-      .map(w => `${w.lat},${w.lng}`)
-      .join('|');
+    const intermediateList = waypoints.slice(1, -1).map(w => `${w.lat},${w.lng}`);
 
     const params = new URLSearchParams({
       origin,
@@ -32,7 +30,10 @@ export class DirectionsService {
       language: 'es',
       mode: 'driving',
     });
-    if (intermediates) params.set('waypoints', intermediates);
+    // Prefix optimize:true so Google returns the most efficient stop order
+    if (intermediateList.length > 0) {
+      params.set('waypoints', `optimize:true|${intermediateList.join('|')}`);
+    }
     if (departureTime) {
       const unixTs = Math.floor(departureTime.getTime() / 1000);
       if (unixTs > Math.floor(Date.now() / 1000)) {
@@ -50,6 +51,8 @@ export class DirectionsService {
     }
 
     const route = data.routes[0];
+    // waypoint_order maps optimized position → original intermediate index
+    const waypointOrder: number[] = route.waypoint_order ?? [];
     // Use duration_in_traffic when available (requires departure_time), else fall back to duration
     const legDurations: number[] = route.legs.map((l: any) =>
       l.duration_in_traffic?.value ?? l.duration.value,
@@ -57,7 +60,7 @@ export class DirectionsService {
     const durationSeconds = legDurations.reduce((a, b) => a + b, 0);
     const polylinePoints = this.decodePolyline(route.overview_polyline.points);
 
-    return { polylinePoints, durationSeconds, legDurations };
+    return { polylinePoints, durationSeconds, legDurations, waypointOrder };
   }
 
   private decodePolyline(encoded: string): [number, number][] {

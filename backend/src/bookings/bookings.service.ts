@@ -141,12 +141,17 @@ export class BookingsService {
       const existingWaypoints = (trip.passengerWaypoints ?? []).map(w => ({ lat: w.lat, lng: w.lng }));
       const allWaypoints = [origin, ...existingWaypoints, { lat: destLat, lng: destLng }, finalDest];
 
-      const { polylinePoints, legDurations } = await this.directionsService.getRoute(allWaypoints, new Date(trip.departureTime));
-      trip.routePolyline = this.geoService.createLineString(polylinePoints);
-      trip.passengerWaypoints = [
+      // Build the full intermediate list (existing stops + new passenger)
+      const intermediates = [
         ...(trip.passengerWaypoints ?? []),
         { passengerId, lat: destLat, lng: destLng },
       ];
+      const { polylinePoints, legDurations, waypointOrder } = await this.directionsService.getRoute(allWaypoints, new Date(trip.departureTime));
+      trip.routePolyline = this.geoService.createLineString(polylinePoints);
+      // Apply Google's optimized order so the saved waypoints match the actual driving sequence
+      trip.passengerWaypoints = waypointOrder.length === intermediates.length
+        ? waypointOrder.map(i => intermediates[i])
+        : intermediates;
       trip.legDurationsSeconds = legDurations;
       await this.tripsRepository.save(trip);
     } catch (e) {
@@ -164,9 +169,12 @@ export class BookingsService {
       const finalDest = { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
       const waypointList = [origin, ...remainingWaypoints.map(w => ({ lat: w.lat, lng: w.lng })), finalDest];
 
-      const { polylinePoints, legDurations } = await this.directionsService.getRoute(waypointList, new Date(trip.departureTime));
+      const { polylinePoints, legDurations, waypointOrder } = await this.directionsService.getRoute(waypointList, new Date(trip.departureTime));
       trip.routePolyline = this.geoService.createLineString(polylinePoints);
-      trip.passengerWaypoints = remainingWaypoints;
+      // Re-apply optimized order after removal
+      trip.passengerWaypoints = waypointOrder.length === remainingWaypoints.length
+        ? waypointOrder.map(i => remainingWaypoints[i])
+        : remainingWaypoints;
       trip.legDurationsSeconds = legDurations;
       await this.tripsRepository.save(trip);
     } catch (e) {
