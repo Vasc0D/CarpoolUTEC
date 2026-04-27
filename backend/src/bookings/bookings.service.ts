@@ -72,13 +72,14 @@ export class BookingsService {
       if (updateResult.affected === 0) {
         throw new BadRequestException('El viaje ya está lleno');
       }
-
-      if (trip.detourEnabled && destLat != null && destLng != null) {
-        await this.recalculateRoute(trip, passengerId, destLat, destLng);
-      }
     }
 
+    // Persist before recalculateRoute so the new passenger appears in the ACCEPTED query inside it
     const savedBooking = await this.bookingsRepository.save(booking);
+
+    if (isAutoAccept && trip.detourEnabled && destLat != null && destLng != null) {
+      await this.recalculateRoute(trip, passengerId, destLat, destLng);
+    }
 
     this.notificationsService.notifyDriverNewRequest(trip.driver.id, {
       bookingId: savedBooking.id,
@@ -121,16 +122,17 @@ export class BookingsService {
     const destLat = booking.destLat != null ? Number(booking.destLat) : null;
     const destLng = booking.destLng != null ? Number(booking.destLng) : null;
 
+    // Persist ACCEPTED status first so recalculateRoute sees this passenger when querying active bookings
+    booking.status = BookingStatus.ACCEPTED;
+    const savedBooking = await this.bookingsRepository.save(booking);
+
     if (booking.trip.detourEnabled && destLat != null && destLng != null) {
       await this.recalculateRoute(booking.trip, booking.passenger.id, destLat, destLng);
     }
 
-    booking.status = BookingStatus.ACCEPTED;
-    const savedBooking = await this.bookingsRepository.save(booking);
-
     this.notificationsService.notifyPassengerStatusChange(booking.passenger.id, {
       bookingId: savedBooking.id,
-      status: 'ACCEPTED', // narrowed literal — we just set this status above
+      status: 'ACCEPTED',
     });
 
     // Reload with fresh trip relations so mapToResponseDto sees updated passengerWaypoints/legDurationsSeconds
@@ -165,22 +167,13 @@ export class BookingsService {
       trip.legDurationsSeconds = legDurations;
       await this.tripsRepository.save(trip);
 
-      // Notify already-accepted passengers that their ETA changed
-      const acceptedBookings = await this.bookingsRepository.find({
-        where: { trip: { id: trip.id }, status: BookingStatus.ACCEPTED },
+      // Notify all active passengers to refetch — avoids stale ETA computed server-side
+      const activeBookings = await this.bookingsRepository.find({
+        where: { trip: { id: trip.id }, status: In([BookingStatus.PENDING, BookingStatus.ACCEPTED]) },
         relations: ['passenger'],
       });
-      const legDurs = trip.legDurationsSeconds ?? [];
-      const totalSeconds = legDurs.reduce((a, b) => a + b, 0);
-      for (const b of acceptedBookings) {
-        const stopIdx = (trip.passengerWaypoints ?? []).findIndex(w => w.passengerId === b.passenger.id);
-        const etaSeconds = stopIdx >= 0
-          ? legDurs.slice(0, stopIdx + 1).reduce((a, c) => a + c, 0)
-          : totalSeconds;
-        this.notificationsService.notifyPassengerEtaUpdated(b.passenger.id, {
-          bookingId: b.id,
-          passengerEtaSeconds: etaSeconds,
-        });
+      for (const b of activeBookings) {
+        this.notificationsService.notifyPassengerRouteUpdated(b.passenger.id, { tripId: trip.id });
       }
     } catch (e) {
       this.logger.error(`Error recalculando ruta para viaje ${trip.id}: ${e.message}`);

@@ -60,6 +60,10 @@ export class NotificationsService {
     this.notificationsGateway.server.to(driverId).emit('route_updated', payload);
   }
 
+  notifyPassengerRouteUpdated(passengerId: string, payload: RouteUpdatedPayload): void {
+    this.notificationsGateway.server.to(passengerId).emit('route_updated', payload);
+  }
+
   notifyPassengerEtaUpdated(passengerId: string, payload: EtaUpdatedPayload): void {
     this.notificationsGateway.server.to(passengerId).emit('eta_updated', payload);
   }

@@ -90,6 +90,11 @@ export const ActiveTripScreen = () => {
             setShowFinishedModal(true);
         });
 
+        socket.on('route_updated', (data: { tripId: string }) => {
+            if (data.tripId !== tripId) return;
+            axiosClient.get(`/trips/${tripId}`).then(res => setTrip(res.data)).catch(() => {});
+        });
+
         return () => { socket.disconnect(); socketRef.current = null; };
     }, [token, tripId]);
 

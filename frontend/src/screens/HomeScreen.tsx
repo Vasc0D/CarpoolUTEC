@@ -335,6 +335,7 @@ export const HomeScreen = () => {
     const fetchTripsRef = useRef<(...args: any[]) => any>(() => {});
     const fetchStopsCoverageRef = useRef<() => any>(() => {});
     const fetchActiveDriverTripRef = useRef<() => any>(() => {});
+    const fetchMyActiveBookingRef = useRef<() => any>(() => {});
 
     // P-2: track keys already queued/completed so we never wipe and re-request the whole cache
     const geocodedKeysRef = useRef<Set<string>>(new Set());
@@ -430,6 +431,7 @@ export const HomeScreen = () => {
     useEffect(() => { fetchTripsRef.current = fetchTrips; }, [fetchTrips]);
     useEffect(() => { fetchStopsCoverageRef.current = fetchStopsCoverage; }, [fetchStopsCoverage]);
     useEffect(() => { fetchActiveDriverTripRef.current = fetchActiveDriverTrip; }, [fetchActiveDriverTrip]);
+    useEffect(() => { fetchMyActiveBookingRef.current = fetchMyActiveBooking; }, [fetchMyActiveBooking]);
 
     const reverseGeocode = useCallback(async (lat: number, lng: number) => {
         const key = `${lat.toFixed(5)},${lng.toFixed(5)}`;
@@ -663,9 +665,8 @@ export const HomeScreen = () => {
         socket.on('booking_status_changed', (data: { bookingId: string; status: 'ACCEPTED' | 'REJECTED' }) => {
             if (data.status === 'ACCEPTED') {
                 Alert.alert('¡Reserva aceptada!', 'El conductor te confirmó el viaje.');
-                setMyActiveBooking(prev =>
-                    prev?.id === data.bookingId ? { ...prev, status: 'ACCEPTED' } : prev
-                );
+                // Refetch so we get the server-computed passengerEtaSeconds after route recalculation
+                fetchMyActiveBookingRef.current();
             } else {
                 Alert.alert('Reserva rechazada', 'El conductor no pudo aceptarte. Puedes buscar otro viaje.');
                 setMyActiveBooking(null);
@@ -707,12 +708,8 @@ export const HomeScreen = () => {
             );
         });
 
-        socket.on('eta_updated', (data: { bookingId: string; passengerEtaSeconds: number }) => {
-            setMyActiveBooking(prev =>
-                prev?.id === data.bookingId
-                    ? { ...prev, passengerEtaSeconds: data.passengerEtaSeconds }
-                    : prev
-            );
+        socket.on('route_updated', () => {
+            fetchMyActiveBookingRef.current();
         });
 
         return () => { socket.disconnect(); socketRef.current = null; };
