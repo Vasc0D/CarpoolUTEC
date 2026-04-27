@@ -75,7 +75,7 @@ export class TripsService {
     let originalDurationSeconds = 0;
 
     try {
-      const { polylinePoints, durationSeconds } = await this.directionsService.getRoute([origin, destination]);
+      const { polylinePoints, durationSeconds } = await this.directionsService.getRoute([origin, destination], new Date(createTripDto.departureTime));
       finalRoute = polylinePoints;
       originalDurationSeconds = durationSeconds;
     } catch (e) {
@@ -169,7 +169,7 @@ export class TripsService {
             const existingWaypoints = (trip.passengerWaypoints ?? []).map(w => ({ lat: w.lat, lng: w.lng }));
             const allWaypoints = [origin, ...existingWaypoints, { lat: destLat, lng: destLng }, finalDest];
 
-            const { durationSeconds } = await this.directionsService.getRoute(allWaypoints);
+            const { durationSeconds } = await this.directionsService.getRoute(allWaypoints, new Date(trip.departureTime));
             const detourSeconds = durationSeconds - trip.originalDurationSeconds;
             const detourMinutes = Math.round(detourSeconds / 60);
 

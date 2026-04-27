@@ -11,7 +11,7 @@ export class DirectionsService {
     this.apiKey = this.configService.getOrThrow<string>('GOOGLE_MAPS_KEY');
   }
 
-  async getRoute(waypoints: { lat: number; lng: number }[]): Promise<{
+  async getRoute(waypoints: { lat: number; lng: number }[], departureTime?: Date): Promise<{
     polylinePoints: [number, number][];
     durationSeconds: number;
   }> {
@@ -32,6 +32,12 @@ export class DirectionsService {
       mode: 'driving',
     });
     if (intermediates) params.set('waypoints', intermediates);
+    if (departureTime) {
+      const unixTs = Math.floor(departureTime.getTime() / 1000);
+      if (unixTs > Math.floor(Date.now() / 1000)) {
+        params.set('departure_time', String(unixTs));
+      }
+    }
 
     const url = `https://maps.googleapis.com/maps/api/directions/json?${params.toString()}`;
     const res = await fetch(url);

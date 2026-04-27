@@ -141,7 +141,7 @@ export class BookingsService {
       const existingWaypoints = (trip.passengerWaypoints ?? []).map(w => ({ lat: w.lat, lng: w.lng }));
       const allWaypoints = [origin, ...existingWaypoints, { lat: destLat, lng: destLng }, finalDest];
 
-      const { polylinePoints } = await this.directionsService.getRoute(allWaypoints);
+      const { polylinePoints } = await this.directionsService.getRoute(allWaypoints, new Date(trip.departureTime));
       trip.routePolyline = this.geoService.createLineString(polylinePoints);
       trip.passengerWaypoints = [
         ...(trip.passengerWaypoints ?? []),
@@ -150,6 +150,25 @@ export class BookingsService {
       await this.tripsRepository.save(trip);
     } catch (e) {
       this.logger.error(`Error recalculando ruta para viaje ${trip.id}: ${e.message}`);
+    }
+  }
+
+  private async removePassengerFromRoute(trip: Trip, passengerId: string): Promise<void> {
+    try {
+      const remainingWaypoints = (trip.passengerWaypoints ?? []).filter(w => w.passengerId !== passengerId);
+      const coords: number[][] = trip.routePolyline?.coordinates;
+      if (!coords?.length || coords.length < 2) return;
+
+      const origin = { lat: coords[0][1], lng: coords[0][0] };
+      const finalDest = { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
+      const waypointList = [origin, ...remainingWaypoints.map(w => ({ lat: w.lat, lng: w.lng })), finalDest];
+
+      const { polylinePoints } = await this.directionsService.getRoute(waypointList, new Date(trip.departureTime));
+      trip.routePolyline = this.geoService.createLineString(polylinePoints);
+      trip.passengerWaypoints = remainingWaypoints;
+      await this.tripsRepository.save(trip);
+    } catch (e) {
+      this.logger.error(`Error eliminando parada tras cancelación en viaje ${trip.id}: ${e.message}`);
     }
   }
 
@@ -206,6 +225,14 @@ export class BookingsService {
     }
 
     const savedBooking = await this.bookingsRepository.save(booking);
+
+    if (wasAccepted && booking.trip.detourEnabled) {
+      const hasWaypoint = (booking.trip.passengerWaypoints ?? []).some(w => w.passengerId === passengerId);
+      if (hasWaypoint) {
+        await this.removePassengerFromRoute(booking.trip, passengerId);
+        this.notificationsService.notifyDriverRouteUpdated(booking.trip.driver.id, { tripId: booking.trip.id });
+      }
+    }
 
     this.notificationsService.notifyDriverBookingCanceled(booking.trip.driver.id, {
       bookingId: savedBooking.id,
@@ -290,6 +317,7 @@ export class BookingsService {
       trip: {
         id: booking.trip.id,
         departureTime: booking.trip.departureTime,
+        originalDurationSeconds: booking.trip.originalDurationSeconds,
         driver: {
           id: booking.trip.driver?.id,
           name: booking.trip.driver?.name,

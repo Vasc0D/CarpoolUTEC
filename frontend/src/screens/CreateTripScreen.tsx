@@ -137,6 +137,7 @@ export const CreateTripScreen = () => {
                         query={{
                             key: GOOGLE_MAPS_KEY,
                             language: 'es',
+                            components: 'country:pe',
                         }}
                         fetchDetails={true}
                         styles={{

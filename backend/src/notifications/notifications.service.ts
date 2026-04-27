@@ -10,6 +10,7 @@ import type {
   NoShowUpdatedPayload,
   BookingCanceledPayload,
   TripAutoCanceledPayload,
+  RouteUpdatedPayload,
 } from './notifications.types';
 
 @Injectable()
@@ -52,6 +53,10 @@ export class NotificationsService {
 
   notifyDriverTripAutoCanceled(driverId: string, payload: TripAutoCanceledPayload): void {
     this.notificationsGateway.server.to(driverId).emit('trip_auto_canceled', payload);
+  }
+
+  notifyDriverRouteUpdated(driverId: string, payload: RouteUpdatedPayload): void {
+    this.notificationsGateway.server.to(driverId).emit('route_updated', payload);
   }
 
   notifyTripPublished(): void {

@@ -22,6 +22,7 @@ interface MyBooking {
     trip: {
         id: string;
         departureTime: string;
+        originalDurationSeconds?: number;
         driver: {
             id: string;
             name: string;
@@ -60,6 +61,12 @@ const formatDateTime = (iso: string) => {
     );
 };
 
+const formatETA = (departureTime: string, durationSeconds?: number): string => {
+    if (!durationSeconds) return '';
+    const eta = new Date(new Date(departureTime).getTime() + durationSeconds * 1000);
+    return eta.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
+};
+
 // ─── Booking Card ─────────────────────────────────────────────────────────────
 
 interface BookingCardProps {
@@ -88,6 +95,11 @@ const BookingCard: React.FC<BookingCardProps> = ({ booking }) => {
                         </Text>
                     )}
                     <Text style={styles.cardTime}>{formatDateTime(booking.trip.departureTime)}</Text>
+                    {!!formatETA(booking.trip.departureTime, booking.trip.originalDurationSeconds) && (
+                        <Text style={[styles.cardTime, { color: '#10B981' }]}>
+                            Llegada est.: {formatETA(booking.trip.departureTime, booking.trip.originalDurationSeconds)}
+                        </Text>
+                    )}
                 </View>
                 {/* Status badge */}
                 <View style={[styles.statusBadge, { backgroundColor: cfg.color + '20' }]}>

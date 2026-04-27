@@ -46,3 +46,7 @@ export interface BookingCanceledPayload {
 export interface TripAutoCanceledPayload {
   tripId: string;
 }
+
+export interface RouteUpdatedPayload {
+  tripId: string;
+}

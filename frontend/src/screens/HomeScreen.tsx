@@ -28,6 +28,7 @@ interface TripMarker {
     meetingPoint: string | null;
     routePolyline: { coordinates: number[][] };
     pricePerSeat: number;
+    originalDurationSeconds?: number;
     distanceToDestination?: number;
     matchType?: 'exact' | 'near' | 'detour';
     detourMinutes?: number;
@@ -43,6 +44,7 @@ interface ActiveBooking {
     tripId: string;
     status: 'PENDING' | 'ACCEPTED';
     departureTime?: string;
+    originalDurationSeconds?: number;
     destLat?: number;
     destLng?: number;
     driver?: {
@@ -57,6 +59,7 @@ interface DriverTripSummary {
     status: 'SCHEDULED' | 'ACTIVE';
     availableSeats: number;
     pricePerSeat: number;
+    originalDurationSeconds?: number;
     routePolyline?: { coordinates: number[][] };
     bookings: Array<{
         id: string;
@@ -86,6 +89,12 @@ const formatTime = (iso: string): string => {
     } catch {
         return iso;
     }
+};
+
+const formatETA = (departureTime: string, durationSeconds?: number): string => {
+    if (!durationSeconds) return '';
+    const eta = new Date(new Date(departureTime).getTime() + durationSeconds * 1000);
+    return eta.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
 };
 
 const POPULAR_STOPS = [
@@ -215,13 +224,11 @@ const TripSheet: React.FC<TripSheetProps> = ({
                                 <Text style={styles.infoLabel}>Salida</Text>
                             </View>
                             <View style={styles.infoCard}>
-                                <Ionicons name="location-outline" size={22} color="#10B981" />
-                                <Text style={styles.infoValue} numberOfLines={2}>
-                                    {meetingCoords
-                                        ? `${meetingCoords.latitude.toFixed(4)},\n${meetingCoords.longitude.toFixed(4)}`
-                                        : 'En ruta'}
+                                <Ionicons name="flag-outline" size={22} color="#10B981" />
+                                <Text style={styles.infoValue}>
+                                    {formatETA(trip.departureTime, trip.originalDurationSeconds) || '--:--'}
                                 </Text>
-                                <Text style={styles.infoLabel}>Punto de encuentro</Text>
+                                <Text style={styles.infoLabel}>Llegada est.</Text>
                             </View>
                         </View>
 
@@ -352,6 +359,7 @@ export const HomeScreen = () => {
                 tripId: active.trip.id,
                 status: active.status,
                 departureTime: active.trip.departureTime,
+                originalDurationSeconds: active.trip.originalDurationSeconds ?? undefined,
                 driver: active.trip.driver,
                 destLat: active.destLat ?? undefined,
                 destLng: active.destLng ?? undefined,
@@ -618,6 +626,10 @@ export const HomeScreen = () => {
             fetchActiveDriverTripRef.current();
         });
 
+        socket.on('route_updated', () => {
+            fetchActiveDriverTripRef.current();
+        });
+
         socket.on('trip_auto_canceled', () => {
             Alert.alert('Viaje cancelado automáticamente', 'Tu viaje fue cancelado porque no tenía pasajeros confirmados al llegar la hora de salida.');
             setActiveDriverTrip(null);
@@ -715,6 +727,7 @@ export const HomeScreen = () => {
                 tripId,
                 status: data.status === 'ACCEPTED' ? 'ACCEPTED' : 'PENDING',
                 departureTime: bookedTrip?.departureTime,
+                originalDurationSeconds: bookedTrip?.originalDurationSeconds,
                 destLat: destLat ?? undefined,
                 destLng: destLng ?? undefined,
                 driver: bookedTrip?.driver ? {
@@ -1016,7 +1029,7 @@ export const HomeScreen = () => {
                                     fetchTrips(lat, lng);
                                 }
                             }}
-                            query={{ key: GOOGLE_MAPS_KEY, language: 'es' }}
+                            query={{ key: GOOGLE_MAPS_KEY, language: 'es', components: 'country:pe' }}
                             fetchDetails={true}
                             textInputProps={{
                                 editable: !myActiveBooking,
@@ -1096,7 +1109,7 @@ export const HomeScreen = () => {
                                 </View>
                             </View>
 
-                            {/* Departure time */}
+                            {/* Departure time + ETA */}
                             {myActiveBooking.departureTime && (
                                 <View style={styles.bookedTimeRow}>
                                     <Ionicons name="time-outline" size={15} color="#64748B" />
@@ -1105,6 +1118,14 @@ export const HomeScreen = () => {
                                     </Text>
                                 </View>
                             )}
+                            {myActiveBooking.departureTime && myActiveBooking.originalDurationSeconds ? (
+                                <View style={styles.bookedTimeRow}>
+                                    <Ionicons name="flag-outline" size={15} color="#10B981" />
+                                    <Text style={[styles.bookedTimeText, { color: '#10B981' }]}>
+                                        Llegada est.: {formatETA(myActiveBooking.departureTime, myActiveBooking.originalDurationSeconds)}
+                                    </Text>
+                                </View>
+                            ) : null}
 
                             {/* Confirm boarding — appears when accepted + departure time reached */}
                             {myActiveBooking.status === 'ACCEPTED' &&
@@ -1245,6 +1266,14 @@ export const HomeScreen = () => {
                                                     {formatTime(trip.departureTime)}
                                                 </Text>
                                             </View>
+                                            {!!formatETA(trip.departureTime, trip.originalDurationSeconds) && (
+                                                <View style={styles.tripCardInfoItem}>
+                                                    <Ionicons name="flag-outline" size={13} color="#10B981" />
+                                                    <Text style={[styles.tripCardInfoText, { color: '#10B981' }]}>
+                                                        ~{formatETA(trip.departureTime, trip.originalDurationSeconds)}
+                                                    </Text>
+                                                </View>
+                                            )}
                                             <View style={styles.tripCardInfoItem}>
                                                 <Ionicons name="people-outline" size={13} color="#64748B" />
                                                 <Text style={styles.tripCardInfoText}>
@@ -1441,9 +1470,9 @@ export const HomeScreen = () => {
                                             </View>
                                             <View style={styles.driverTripStatDark}>
                                                 <Text style={styles.driverTripStatDarkValue}>
-                                                    S/ {Number(activeDriverTrip.pricePerSeat ?? 0).toFixed(0)}
+                                                    {formatETA(activeDriverTrip.departureTime, activeDriverTrip.originalDurationSeconds) || '--:--'}
                                                 </Text>
-                                                <Text style={styles.driverTripStatDarkLabel}>Por asiento</Text>
+                                                <Text style={styles.driverTripStatDarkLabel}>Llegada est.</Text>
                                             </View>
                                             <View style={styles.driverTripStatDark}>
                                                 <Text style={styles.driverTripStatDarkValue}>

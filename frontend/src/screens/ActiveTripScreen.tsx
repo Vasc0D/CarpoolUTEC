@@ -19,6 +19,7 @@ type ActiveTripRouteProp = RouteProp<RootStackParamList, 'ActiveTrip'>;
 interface TripDetail {
     id: string;
     departureTime: string;
+    originalDurationSeconds?: number;
     meetingPoint: string | null;
     driver: { id: string; name: string };
     routePolyline: { coordinates: number[][] } | null;
@@ -28,6 +29,12 @@ interface TripDetail {
 
 const formatTime = (iso: string) =>
     new Date(iso).toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
+
+const formatETA = (departureTime: string, durationSeconds?: number): string => {
+    if (!durationSeconds) return '';
+    const eta = new Date(new Date(departureTime).getTime() + durationSeconds * 1000);
+    return eta.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
+};
 
 const UTEC_COORDS = { latitude: -12.135, longitude: -77.023 };
 
@@ -170,9 +177,19 @@ export const ActiveTripScreen = () => {
                             <Text style={styles.driverName}>{trip.driver.name}</Text>
                             <Text style={styles.driverSubLabel}>Conductor</Text>
                         </View>
-                        <View style={styles.timeBadge}>
-                            <Ionicons name="time-outline" size={13} color="#0EA5E9" />
-                            <Text style={styles.timeText}>{formatTime(trip.departureTime)}</Text>
+                        <View style={{ gap: 4 }}>
+                            <View style={styles.timeBadge}>
+                                <Ionicons name="time-outline" size={13} color="#0EA5E9" />
+                                <Text style={styles.timeText}>{formatTime(trip.departureTime)}</Text>
+                            </View>
+                            {!!formatETA(trip.departureTime, trip.originalDurationSeconds) && (
+                                <View style={[styles.timeBadge, { backgroundColor: '#ECFDF5' }]}>
+                                    <Ionicons name="flag-outline" size={13} color="#10B981" />
+                                    <Text style={[styles.timeText, { color: '#10B981' }]}>
+                                        ~{formatETA(trip.departureTime, trip.originalDurationSeconds)}
+                                    </Text>
+                                </View>
+                            )}
                         </View>
                     </View>
 
