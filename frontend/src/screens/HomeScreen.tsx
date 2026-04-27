@@ -707,6 +707,14 @@ export const HomeScreen = () => {
             );
         });
 
+        socket.on('eta_updated', (data: { bookingId: string; passengerEtaSeconds: number }) => {
+            setMyActiveBooking(prev =>
+                prev?.id === data.bookingId
+                    ? { ...prev, passengerEtaSeconds: data.passengerEtaSeconds }
+                    : prev
+            );
+        });
+
         return () => { socket.disconnect(); socketRef.current = null; };
     }, [appMode, token]); // P-1: fetchStopsCoverage / fetchTrips accessed via stable refs — omitting them prevents socket reconnect on destination change
 

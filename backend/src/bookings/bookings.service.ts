@@ -154,6 +154,24 @@ export class BookingsService {
         : intermediates;
       trip.legDurationsSeconds = legDurations;
       await this.tripsRepository.save(trip);
+
+      // Notify already-accepted passengers that their ETA changed
+      const acceptedBookings = await this.bookingsRepository.find({
+        where: { trip: { id: trip.id }, status: BookingStatus.ACCEPTED },
+        relations: ['passenger'],
+      });
+      const legDurs = trip.legDurationsSeconds ?? [];
+      const totalSeconds = legDurs.reduce((a, b) => a + b, 0);
+      for (const b of acceptedBookings) {
+        const stopIdx = (trip.passengerWaypoints ?? []).findIndex(w => w.passengerId === b.passenger.id);
+        const etaSeconds = stopIdx >= 0
+          ? legDurs.slice(0, stopIdx + 1).reduce((a, c) => a + c, 0)
+          : totalSeconds;
+        this.notificationsService.notifyPassengerEtaUpdated(b.passenger.id, {
+          bookingId: b.id,
+          passengerEtaSeconds: etaSeconds,
+        });
+      }
     } catch (e) {
       this.logger.error(`Error recalculando ruta para viaje ${trip.id}: ${e.message}`);
     }

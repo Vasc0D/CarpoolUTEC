@@ -50,3 +50,8 @@ export interface TripAutoCanceledPayload {
 export interface RouteUpdatedPayload {
   tripId: string;
 }
+
+export interface EtaUpdatedPayload {
+  bookingId: string;
+  passengerEtaSeconds: number;
+}
