@@ -1,11 +1,28 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
+/**
+ * Routes API v2 client (https://routes.googleapis.com/directions/v2:computeRoutes).
+ *
+ * Replaces the legacy Directions API because the old endpoint silently drops
+ * `duration_in_traffic` from leg responses whenever any intermediate waypoint
+ * is present, which made multi-stop ETAs fall back to free-flow estimates.
+ * Routes v2 returns traffic-aware leg durations together with optimized
+ * waypoint ordering in a single call.
+ */
 @Injectable()
 export class DirectionsService {
   private readonly logger = new Logger(DirectionsService.name);
-  // A-5: use ConfigService.getOrThrow so the app refuses to start if the key is absent
   private readonly apiKey: string;
+
+  private static readonly ENDPOINT = 'https://routes.googleapis.com/directions/v2:computeRoutes';
+  // Routes v2 requires an explicit field mask; omitting fields here means they won't come back.
+  private static readonly FIELD_MASK = [
+    'routes.duration',
+    'routes.legs.duration',
+    'routes.polyline.encodedPolyline',
+    'routes.optimizedIntermediateWaypointIndex',
+  ].join(',');
 
   constructor(private readonly configService: ConfigService) {
     this.apiKey = this.configService.getOrThrow<string>('GOOGLE_MAPS_KEY');
@@ -23,81 +40,75 @@ export class DirectionsService {
     const destination = waypoints[waypoints.length - 1];
     const intermediates = waypoints.slice(1, -1);
 
-    // Google's `optimize:true` is incompatible with `duration_in_traffic`: when both are requested,
-    // the legs in the response come without `duration_in_traffic`. We split the work in two calls:
-    //   1) one call with optimize:true (no traffic) to get the optimal waypoint order
-    //   2) one call with the ordered waypoints (no optimize) WITH departure_time to get duration_in_traffic
-    // For 0 or 1 intermediates there is nothing to optimize, so we skip step 1.
-    let waypointOrder: number[] = intermediates.map((_, i) => i);
-    let orderedIntermediates = intermediates;
+    const body: Record<string, any> = {
+      origin: this.toLatLngWaypoint(origin),
+      destination: this.toLatLngWaypoint(destination),
+      travelMode: 'DRIVE',
+      // TRAFFIC_AWARE: balances accuracy and latency, returns live + historical traffic.
+      // Use TRAFFIC_AWARE_OPTIMAL only if higher precision is worth the extra cost.
+      routingPreference: 'TRAFFIC_AWARE',
+      polylineEncoding: 'ENCODED_POLYLINE',
+      languageCode: 'es',
+    };
 
-    if (intermediates.length > 1) {
-      const orderUrl = this.buildUrl(origin, destination, intermediates, { optimize: true });
-      const orderData = await this.fetchDirections(orderUrl);
-      waypointOrder = orderData.routes[0].waypoint_order ?? waypointOrder;
-      orderedIntermediates = waypointOrder.map(i => intermediates[i]);
+    if (intermediates.length > 0) {
+      body.intermediates = intermediates.map(w => this.toLatLngWaypoint(w));
+      // No permutation possible with a single intermediate; only opt-in when there's a real choice.
+      if (intermediates.length > 1) body.optimizeWaypointOrder = true;
     }
 
-    const finalUrl = this.buildUrl(origin, destination, orderedIntermediates, {
-      optimize: false,
-      departureTime,
-    });
-    const data = await this.fetchDirections(finalUrl);
-    const route = data.routes[0];
+    // departureTime must be in the future for the API to accept it; for "now" or past values
+    // Routes v2 implicitly uses the current time when the field is omitted.
+    if (departureTime && departureTime.getTime() > Date.now()) {
+      body.departureTime = new Date(departureTime.getTime()).toISOString();
+    }
 
-    const legDurations: number[] = route.legs.map((l: any) =>
-      l.duration_in_traffic?.value ?? l.duration.value,
-    );
-    const durationSeconds = legDurations.reduce((a, b) => a + b, 0);
-    const polylinePoints = this.decodePolyline(route.overview_polyline.points);
+    const data = await this.fetchRoute(body);
+    const route = data.routes?.[0];
+    if (!route) throw new Error('Routes API: no routes returned');
+
+    const legDurations: number[] = (route.legs ?? []).map((l: any) => this.parseDuration(l.duration));
+    const durationSeconds = legDurations.length > 0
+      ? legDurations.reduce((a, b) => a + b, 0)
+      : this.parseDuration(route.duration);
+    const polylinePoints = this.decodePolyline(route.polyline?.encodedPolyline ?? '');
+    // optimizedIntermediateWaypointIndex is only populated when optimizeWaypointOrder=true was sent.
+    const waypointOrder: number[] = route.optimizedIntermediateWaypointIndex
+      ?? intermediates.map((_, i) => i);
 
     return { polylinePoints, durationSeconds, legDurations, waypointOrder };
   }
 
-  private buildUrl(
-    origin: { lat: number; lng: number },
-    destination: { lat: number; lng: number },
-    intermediates: { lat: number; lng: number }[],
-    opts: { optimize?: boolean; departureTime?: Date },
-  ): string {
-    const params = new URLSearchParams({
-      origin: `${origin.lat},${origin.lng}`,
-      destination: `${destination.lat},${destination.lng}`,
-      key: this.apiKey,
-      language: 'es',
-      mode: 'driving',
-    });
-
-    if (intermediates.length > 0) {
-      const list = intermediates.map(w => `${w.lat},${w.lng}`).join('|');
-      params.set('waypoints', opts.optimize ? `optimize:true|${list}` : list);
-    }
-
-    // departure_time only matters in the final (non-optimize) call; including it with optimize:true
-    // causes Google to drop duration_in_traffic from the response.
-    if (opts.departureTime && !opts.optimize) {
-      const nowSec = Math.floor(Date.now() / 1000);
-      const unixTs = Math.floor(opts.departureTime.getTime() / 1000);
-      params.set('departure_time', unixTs > nowSec ? String(unixTs) : 'now');
-      params.set('traffic_model', 'best_guess');
-    }
-
-    return `https://maps.googleapis.com/maps/api/directions/json?${params.toString()}`;
+  private toLatLngWaypoint(p: { lat: number; lng: number }) {
+    return { location: { latLng: { latitude: p.lat, longitude: p.lng } } };
   }
 
-  private async fetchDirections(url: string): Promise<any> {
-    const res = await fetch(url);
+  private async fetchRoute(body: Record<string, any>): Promise<any> {
+    const res = await fetch(DirectionsService.ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': this.apiKey,
+        'X-Goog-FieldMask': DirectionsService.FIELD_MASK,
+      },
+      body: JSON.stringify(body),
+    });
     const data = await res.json() as any;
-    if (data.status !== 'OK') {
-      this.logger.error(`Directions API error: ${data.status}`);
-      throw new Error(`Directions API: ${data.status}`);
+    if (!res.ok || data.error) {
+      const msg = data.error?.message ?? `HTTP ${res.status}`;
+      this.logger.error(`Routes API error: ${msg}`);
+      throw new Error(`Routes API: ${msg}`);
     }
-    this.logger.debug(`Directions URL: ${url.replace(this.apiKey, 'REDACTED')}`);
-    this.logger.debug(`Legs response: ${JSON.stringify(data.routes[0].legs.map((l: any) => ({
-      duration: l.duration,
-      duration_in_traffic: l.duration_in_traffic,
-    })))}`);
+    this.logger.debug(`Routes request body: ${JSON.stringify(body)}`);
+    this.logger.debug(`Routes response legs: ${JSON.stringify(data.routes?.[0]?.legs)}`);
     return data;
+  }
+
+  // Routes v2 returns durations as protobuf strings like "1234s" or "1234.5s".
+  private parseDuration(s: string | undefined): number {
+    if (!s) return 0;
+    const match = /^(\d+(?:\.\d+)?)s$/.exec(s);
+    return match ? Math.round(parseFloat(match[1])) : 0;
   }
 
   private decodePolyline(encoded: string): [number, number][] {
