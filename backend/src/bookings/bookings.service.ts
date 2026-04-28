@@ -156,9 +156,11 @@ export class BookingsService {
       const existingWaypoints = (trip.passengerWaypoints ?? []).map(w => ({ lat: w.lat, lng: w.lng }));
       const allWaypoints = [origin, ...existingWaypoints, { lat: destLat, lng: destLng }, finalDest];
 
-      // Build the full intermediate list (existing stops + new passenger)
+      // Build the full intermediate list (existing stops + new passenger).
+      // Filter out any pre-existing waypoint for this passenger so re-entrant calls
+      // (double-tap, retries, race conditions) cannot duplicate the same stop.
       const intermediates = [
-        ...(trip.passengerWaypoints ?? []),
+        ...(trip.passengerWaypoints ?? []).filter(w => w.passengerId !== passengerId),
         { passengerId, lat: destLat, lng: destLng },
       ];
       const { polylinePoints, legDurations, waypointOrder } = await this.directionsService.getRoute(allWaypoints, new Date(trip.departureTime));
