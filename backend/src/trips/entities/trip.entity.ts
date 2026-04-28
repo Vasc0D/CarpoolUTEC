@@ -38,6 +38,12 @@ export class Trip {
   originalDurationSeconds: number;
 
   @Column({ type: 'json', nullable: true })
+  tripOrigin: { lat: number; lng: number } | null;
+
+  @Column({ type: 'json', nullable: true })
+  finalDestination: { lat: number; lng: number } | null;
+
+  @Column({ type: 'json', nullable: true })
   passengerWaypoints: { passengerId: string; lat: number; lng: number }[] | null;
 
   @Column({ type: 'json', nullable: true })

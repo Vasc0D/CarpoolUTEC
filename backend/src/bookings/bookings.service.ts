@@ -148,8 +148,11 @@ export class BookingsService {
       const coords: number[][] = trip.routePolyline?.coordinates;
       if (!coords?.length || coords.length < 2) return;
 
-      const origin = { lat: coords[0][1], lng: coords[0][0] };
-      const finalDest = { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
+      // Use pinned coordinates to prevent drift across recalculations; fall back to polyline for legacy trips
+      const origin = trip.tripOrigin
+        ?? { lat: coords[0][1], lng: coords[0][0] };
+      const finalDest = trip.finalDestination
+        ?? { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
       const existingWaypoints = (trip.passengerWaypoints ?? []).map(w => ({ lat: w.lat, lng: w.lng }));
       const allWaypoints = [origin, ...existingWaypoints, { lat: destLat, lng: destLng }, finalDest];
 
@@ -186,8 +189,11 @@ export class BookingsService {
       const coords: number[][] = trip.routePolyline?.coordinates;
       if (!coords?.length || coords.length < 2) return;
 
-      const origin = { lat: coords[0][1], lng: coords[0][0] };
-      const finalDest = { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
+      // Use pinned coordinates to prevent drift across recalculations; fall back to polyline for legacy trips
+      const origin = trip.tripOrigin
+        ?? { lat: coords[0][1], lng: coords[0][0] };
+      const finalDest = trip.finalDestination
+        ?? { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
       const waypointList = [origin, ...remainingWaypoints.map(w => ({ lat: w.lat, lng: w.lng })), finalDest];
 
       const { polylinePoints, legDurations, waypointOrder } = await this.directionsService.getRoute(waypointList, new Date(trip.departureTime));

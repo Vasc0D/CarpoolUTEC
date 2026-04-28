@@ -97,6 +97,8 @@ export class TripsService {
       originalDurationSeconds,
       legDurationsSeconds,
       status: TripStatus.SCHEDULED,
+      tripOrigin: { lat: origin.lat, lng: origin.lng },
+      finalDestination: { lat: destination.lat, lng: destination.lng },
     });
 
     const saved = await this.tripsRepository.save(trip);
@@ -167,8 +169,11 @@ export class TripsService {
             const coords: number[][] = trip.routePolyline?.coordinates;
             if (!coords?.length || coords.length < 2) return null;
 
-            const origin = { lat: coords[0][1], lng: coords[0][0] };
-            const finalDest = { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
+            // Use pinned coordinates to prevent drift; fall back to polyline for legacy trips
+            const origin = trip.tripOrigin
+              ?? { lat: coords[0][1], lng: coords[0][0] };
+            const finalDest = trip.finalDestination
+              ?? { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
             const existingWaypoints = (trip.passengerWaypoints ?? []).map(w => ({ lat: w.lat, lng: w.lng }));
             const allWaypoints = [origin, ...existingWaypoints, { lat: destLat, lng: destLng }, finalDest];
 
@@ -452,8 +457,11 @@ export class TripsService {
     const coords: number[][] = trip.routePolyline?.coordinates;
     if (!coords?.length || coords.length < 2) throw new NotFoundException('No se pudo calcular la ruta');
 
-    const origin = { lat: coords[0][1], lng: coords[0][0] };
-    const finalDest = { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
+    // Use pinned coordinates to prevent drift; fall back to polyline for legacy trips
+    const origin = trip.tripOrigin
+      ?? { lat: coords[0][1], lng: coords[0][0] };
+    const finalDest = trip.finalDestination
+      ?? { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
     const existingWaypoints = (trip.passengerWaypoints ?? []).map(w => ({ lat: w.lat, lng: w.lng }));
     const allWaypoints = [origin, ...existingWaypoints, { lat: destLat, lng: destLng }, finalDest];
 
