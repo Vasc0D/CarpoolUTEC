@@ -63,6 +63,7 @@ interface DriverTripSummary {
     legDurationsSeconds?: number[] | null;
     passengerWaypoints?: { passengerId: string; lat: number; lng: number }[] | null;
     routePolyline?: { coordinates: number[][] };
+    finalDestination?: { lat: number; lng: number } | null;
     bookings: Array<{
         id: string;
         status: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'CANCELED' | 'COMPLETED';
@@ -861,11 +862,11 @@ export const HomeScreen = () => {
             setActiveDriverTrip(prev => prev ? { ...prev, status: 'ACTIVE' } : null);
 
             const coords = activeDriverTrip.routePolyline?.coordinates;
-            if (coords?.length) {
-                const last = coords[coords.length - 1];
-                const finalLat = last[1];
-                const finalLng = last[0];
-
+            const dest = activeDriverTrip.finalDestination;
+            const polylineLast = coords?.length ? coords[coords.length - 1] : null;
+            const finalLat = dest?.lat ?? (polylineLast ? polylineLast[1] : null);
+            const finalLng = dest?.lng ?? (polylineLast ? polylineLast[0] : null);
+            if (finalLat != null && finalLng != null) {
                 // Build ordered waypoint list from passengerWaypoints (already in driving order)
                 const stops = (activeDriverTrip.passengerWaypoints ?? []);
 
