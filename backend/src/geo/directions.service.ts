@@ -92,6 +92,11 @@ export class DirectionsService {
       this.logger.error(`Directions API error: ${data.status}`);
       throw new Error(`Directions API: ${data.status}`);
     }
+    this.logger.debug(`Directions URL: ${url.replace(this.apiKey, 'REDACTED')}`);
+    this.logger.debug(`Legs response: ${JSON.stringify(data.routes[0].legs.map((l: any) => ({
+      duration: l.duration,
+      duration_in_traffic: l.duration_in_traffic,
+    })))}`);
     return data;
   }
 
