@@ -863,10 +863,29 @@ export const HomeScreen = () => {
             const coords = activeDriverTrip.routePolyline?.coordinates;
             if (coords?.length) {
                 const last = coords[coords.length - 1];
-                const lat = last[1]; const lng = last[0];
-                const wazeUrl = `waze://?ll=${lat},${lng}&navigate=yes`;
-                const googleNative = `comgooglemaps://?daddr=${lat},${lng}&directionsmode=driving`;
-                const googleWeb = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
+                const finalLat = last[1];
+                const finalLng = last[0];
+
+                // Build ordered waypoint list from passengerWaypoints (already in driving order)
+                const stops = (activeDriverTrip.passengerWaypoints ?? []);
+
+                // Google Maps native: daddr supports +to: chaining for multi-stop routes
+                // Format: daddr=wp1lat,wp1lng+to:wp2lat,wp2lng+to:finalLat,finalLng
+                const allDests = [
+                    ...stops.map(w => `${w.lat},${w.lng}`),
+                    `${finalLat},${finalLng}`,
+                ].join('+to:');
+                const googleNative = `comgooglemaps://?daddr=${allDests}&directionsmode=driving`;
+
+                // Google Maps web: waypoints param (pipe-separated), destination is the final stop
+                const waypointStr = stops.map(w => `${w.lat},${w.lng}`).join('|');
+                const googleWeb = stops.length > 0
+                    ? `https://www.google.com/maps/dir/?api=1&destination=${finalLat},${finalLng}&waypoints=${encodeURIComponent(waypointStr)}&travelmode=driving`
+                    : `https://www.google.com/maps/dir/?api=1&destination=${finalLat},${finalLng}&travelmode=driving`;
+
+                // Waze does not support multi-stop URL schemes — send only the final destination
+                const wazeUrl = `waze://?ll=${finalLat},${finalLng}&navigate=yes`;
+
                 const [wazeOk, googleOk] = await Promise.all([
                     Linking.canOpenURL(wazeUrl),
                     Linking.canOpenURL(googleNative),
