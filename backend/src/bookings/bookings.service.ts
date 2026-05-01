@@ -1,9 +1,10 @@
 import {
     Injectable, NotFoundException, BadRequestException,
-    ConflictException, ForbiddenException, GoneException, Logger,
+    ConflictException, ForbiddenException, GoneException,
+    InternalServerErrorException, Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { Booking, BookingStatus } from './entities/booking.entity';
 import { Trip, TripStatus } from '../trips/entities/trip.entity';
 import { UsersService } from '../users/users.service';
@@ -32,6 +33,7 @@ export class BookingsService {
     private readonly notificationsService: NotificationsService,
     private readonly directionsService: DirectionsService,
     private readonly geoService: GeoService,
+    private readonly dataSource: DataSource,
   ) {}
 
   async solicitSeat(tripId: string, passengerId: string, destLat?: number, destLng?: number): Promise<BookingResponseDto> {
@@ -59,33 +61,47 @@ export class BookingsService {
     if (!passenger) throw new NotFoundException('Pasajero no encontrado');
 
     const isAutoAccept = trip.autoAccept;
-    const booking = this.bookingsRepository.create({
-      trip,
-      passenger,
-      status: isAutoAccept ? BookingStatus.ACCEPTED : BookingStatus.PENDING,
-      destLat: destLat ?? null,
-      destLng: destLng ?? null,
+
+    // Phase 1: atomically reserve the seat and persist the booking. Wrapping
+    // both in a single DB transaction means a save() failure rolls back the
+    // seat decrement, and a decrement that races against another booking
+    // rolls back the booking row — never an orphan seat or orphan booking.
+    const savedBooking = await this.dataSource.transaction(async (manager: EntityManager) => {
+      if (isAutoAccept) {
+        const updateResult = await manager
+          .createQueryBuilder()
+          .update(Trip)
+          .set({ availableSeats: () => '"availableSeats" - 1' })
+          .where('id = :id AND "availableSeats" > 0', { id: trip.id })
+          .execute();
+        if (updateResult.affected === 0) {
+          throw new BadRequestException('El viaje ya está lleno');
+        }
+      }
+      return manager.save(Booking, manager.create(Booking, {
+        trip,
+        passenger,
+        status: isAutoAccept ? BookingStatus.ACCEPTED : BookingStatus.PENDING,
+        destLat: destLat ?? null,
+        destLng: destLng ?? null,
+      }));
     });
 
-    if (isAutoAccept) {
-      // H-3: atomic decrement to prevent race conditions
-      const updateResult = await this.tripsRepository
-        .createQueryBuilder()
-        .update(Trip)
-        .set({ availableSeats: () => '"availableSeats" - 1' })
-        .where('id = :id AND "availableSeats" > 0', { id: trip.id })
-        .execute();
-
-      if (updateResult.affected === 0) {
-        throw new BadRequestException('El viaje ya está lleno');
-      }
-    }
-
-    // Persist before recalculateRoute so the new passenger appears in the ACCEPTED query inside it
-    const savedBooking = await this.bookingsRepository.save(booking);
-
+    // Phase 2: recalc the route OUTSIDE the DB transaction (Routes API call
+    // would otherwise hold a DB connection for the full HTTP latency). If it
+    // fails for an auto-accepted booking, we run a compensating transaction
+    // that reverts the booking and restores the seat — leaving the user
+    // with a clean error rather than an ACCEPTED booking on a stale route.
     if (isAutoAccept && trip.detourEnabled && destLat != null && destLng != null) {
-      await this.recalculateRoute(trip, passengerId, destLat, destLng);
+      try {
+        await this.recalculateRoute(trip, passengerId, destLat, destLng);
+      } catch (e) {
+        await this.compensateAcceptedBooking(savedBooking.id, trip.id);
+        this.logger.error(`Booking ${savedBooking.id} reverted: route recalc failed (${e.message})`);
+        throw new InternalServerErrorException(
+          'No se pudo calcular la ruta para incluir tu parada. Intenta nuevamente en unos segundos.',
+        );
+      }
     }
 
     this.notificationsService.notifyDriverNewRequest(trip.driver.id, {
@@ -114,27 +130,35 @@ export class BookingsService {
     if (booking.trip.driver.id !== driverId) throw new ForbiddenException('Solo el conductor puede aceptar reservas');
     if (booking.status !== BookingStatus.PENDING) throw new BadRequestException('La reserva no está pendiente');
 
-    // H-3: atomic decrement — prevents over-accepting when multiple bookings are accepted simultaneously
-    const updateResult = await this.tripsRepository
-      .createQueryBuilder()
-      .update(Trip)
-      .set({ availableSeats: () => '"availableSeats" - 1' })
-      .where('id = :id AND "availableSeats" > 0', { id: booking.trip.id })
-      .execute();
-
-    if (updateResult.affected === 0) {
-      throw new BadRequestException('El viaje ya está lleno');
-    }
+    // Phase 1: atomic seat decrement + status flip in one DB transaction.
+    const savedBooking = await this.dataSource.transaction(async (manager: EntityManager) => {
+      const updateResult = await manager
+        .createQueryBuilder()
+        .update(Trip)
+        .set({ availableSeats: () => '"availableSeats" - 1' })
+        .where('id = :id AND "availableSeats" > 0', { id: booking.trip.id })
+        .execute();
+      if (updateResult.affected === 0) {
+        throw new BadRequestException('El viaje ya está lleno');
+      }
+      booking.status = BookingStatus.ACCEPTED;
+      return manager.save(Booking, booking);
+    });
 
     const destLat = booking.destLat != null ? Number(booking.destLat) : null;
     const destLng = booking.destLng != null ? Number(booking.destLng) : null;
 
-    // Persist ACCEPTED status first so recalculateRoute sees this passenger when querying active bookings
-    booking.status = BookingStatus.ACCEPTED;
-    const savedBooking = await this.bookingsRepository.save(booking);
-
+    // Phase 2: route recalc outside the DB transaction; compensate on failure.
     if (booking.trip.detourEnabled && destLat != null && destLng != null) {
-      await this.recalculateRoute(booking.trip, booking.passenger.id, destLat, destLng);
+      try {
+        await this.recalculateRoute(booking.trip, booking.passenger.id, destLat, destLng);
+      } catch (e) {
+        await this.compensateAcceptedBooking(savedBooking.id, booking.trip.id);
+        this.logger.error(`Booking ${savedBooking.id} reverted on accept: route recalc failed (${e.message})`);
+        throw new InternalServerErrorException(
+          'No se pudo calcular la ruta para incluir esta parada. Intenta nuevamente.',
+        );
+      }
     }
 
     this.notificationsService.notifyPassengerStatusChange(booking.passenger.id, {
@@ -150,59 +174,81 @@ export class BookingsService {
     return this.mapToResponseDto(freshBooking ?? savedBooking);
   }
 
+  /**
+   * Compensating transaction: cancel an accepted booking and restore its seat.
+   * Used when route recalculation fails after Phase 1 has already committed —
+   * instead of leaving the user with an ACCEPTED booking on a stale route, we
+   * roll back to the pre-accept state and surface a clean error.
+   */
+  private async compensateAcceptedBooking(bookingId: string, tripId: string): Promise<void> {
+    await this.dataSource.transaction(async (manager: EntityManager) => {
+      await manager.update(Booking, bookingId, { status: BookingStatus.CANCELED });
+      await manager
+        .createQueryBuilder()
+        .update(Trip)
+        .set({ availableSeats: () => '"availableSeats" + 1' })
+        .where('id = :id', { id: tripId })
+        .execute();
+    });
+  }
+
+  /**
+   * Recomputes the trip route to include or remove a passenger's stop.
+   * Throws on Routes API failure so callers can run a compensating transaction;
+   * earlier versions swallowed the error and left the trip in an inconsistent
+   * state (booking ACCEPTED, route still pointing at the old waypoints).
+   */
   private async recalculateRoute(trip: Trip, passengerId: string, destLat: number, destLng: number): Promise<void> {
     // Lock by tripId so concurrent recalculations for the same trip serialize.
     // Without this, two near-simultaneous accepts each read passengerWaypoints
     // pre-write and the second save() overwrites the first.
     await this.recalcMutex.run(trip.id, async () => {
-      try {
-        // Re-load the trip inside the lock — relying on the caller's snapshot
-        // means we'd miss updates committed by the previous lock holder.
-        const fresh = await this.tripsRepository.findOne({ where: { id: trip.id } });
-        if (!fresh) return;
+      // Re-load the trip inside the lock — relying on the caller's snapshot
+      // means we'd miss updates committed by the previous lock holder.
+      const fresh = await this.tripsRepository.findOne({ where: { id: trip.id } });
+      if (!fresh) throw new Error(`Trip ${trip.id} no longer exists`);
 
-        const coords: number[][] = fresh.routePolyline?.coordinates;
-        if (!coords?.length || coords.length < 2) return;
+      const coords: number[][] = fresh.routePolyline?.coordinates;
+      if (!coords?.length || coords.length < 2) {
+        throw new Error(`Trip ${trip.id} has no usable routePolyline`);
+      }
 
-        // Use pinned coordinates to prevent drift across recalculations; fall back to polyline for legacy trips
-        const origin = fresh.tripOrigin
-          ?? { lat: coords[0][1], lng: coords[0][0] };
-        const finalDest = fresh.finalDestination
-          ?? { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
+      // Use pinned coordinates to prevent drift across recalculations; fall back to polyline for legacy trips
+      const origin = fresh.tripOrigin
+        ?? { lat: coords[0][1], lng: coords[0][0] };
+      const finalDest = fresh.finalDestination
+        ?? { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
 
-        // Build the full intermediate list (existing stops + new passenger).
-        // Filter out any pre-existing waypoint for this passenger so re-entrant calls
-        // (double-tap, retries, race conditions) cannot duplicate the same stop.
-        const intermediates = [
-          ...(fresh.passengerWaypoints ?? []).filter(w => w.passengerId !== passengerId),
-          { passengerId, lat: destLat, lng: destLng },
-        ];
-        const allWaypoints = [origin, ...intermediates.map(w => ({ lat: w.lat, lng: w.lng })), finalDest];
+      // Build the full intermediate list (existing stops + new passenger).
+      // Filter out any pre-existing waypoint for this passenger so re-entrant calls
+      // (double-tap, retries, race conditions) cannot duplicate the same stop.
+      const intermediates = [
+        ...(fresh.passengerWaypoints ?? []).filter(w => w.passengerId !== passengerId),
+        { passengerId, lat: destLat, lng: destLng },
+      ];
+      const allWaypoints = [origin, ...intermediates.map(w => ({ lat: w.lat, lng: w.lng })), finalDest];
 
-        const { polylinePoints, legDurations, waypointOrder } = await this.directionsService.getRoute(allWaypoints, new Date(fresh.departureTime));
-        fresh.routePolyline = this.geoService.createLineString(polylinePoints);
-        // Apply Google's optimized order so the saved waypoints match the actual driving sequence
-        fresh.passengerWaypoints = waypointOrder.length === intermediates.length
-          ? waypointOrder.map(i => intermediates[i])
-          : intermediates;
-        fresh.legDurationsSeconds = legDurations;
-        await this.tripsRepository.save(fresh);
+      const { polylinePoints, legDurations, waypointOrder } = await this.directionsService.getRoute(allWaypoints, new Date(fresh.departureTime));
+      fresh.routePolyline = this.geoService.createLineString(polylinePoints);
+      // Apply Google's optimized order so the saved waypoints match the actual driving sequence
+      fresh.passengerWaypoints = waypointOrder.length === intermediates.length
+        ? waypointOrder.map(i => intermediates[i])
+        : intermediates;
+      fresh.legDurationsSeconds = legDurations;
+      await this.tripsRepository.save(fresh);
 
-        // Mutate the caller's reference so its post-recalc reads (mapToResponseDto) see fresh data.
-        trip.routePolyline = fresh.routePolyline;
-        trip.passengerWaypoints = fresh.passengerWaypoints;
-        trip.legDurationsSeconds = fresh.legDurationsSeconds;
+      // Mutate the caller's reference so its post-recalc reads (mapToResponseDto) see fresh data.
+      trip.routePolyline = fresh.routePolyline;
+      trip.passengerWaypoints = fresh.passengerWaypoints;
+      trip.legDurationsSeconds = fresh.legDurationsSeconds;
 
-        // Notify all active passengers to refetch — avoids stale ETA computed server-side
-        const activeBookings = await this.bookingsRepository.find({
-          where: { trip: { id: fresh.id }, status: In([BookingStatus.PENDING, BookingStatus.ACCEPTED]) },
-          relations: ['passenger'],
-        });
-        for (const b of activeBookings) {
-          this.notificationsService.notifyPassengerRouteUpdated(b.passenger.id, { tripId: fresh.id });
-        }
-      } catch (e) {
-        this.logger.error(`Error recalculando ruta para viaje ${trip.id}: ${e.message}`);
+      // Notify all active passengers to refetch — avoids stale ETA computed server-side
+      const activeBookings = await this.bookingsRepository.find({
+        where: { trip: { id: fresh.id }, status: In([BookingStatus.PENDING, BookingStatus.ACCEPTED]) },
+        relations: ['passenger'],
+      });
+      for (const b of activeBookings) {
+        this.notificationsService.notifyPassengerRouteUpdated(b.passenger.id, { tripId: fresh.id });
       }
     });
   }
