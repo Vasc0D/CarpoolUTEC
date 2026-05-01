@@ -1,5 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { RouteCache } from './route-cache';
+
+type RouteResult = {
+  polylinePoints: [number, number][];
+  durationSeconds: number;
+  legDurations: number[];
+  waypointOrder: number[];
+};
 
 /**
  * Routes API v2 client (https://routes.googleapis.com/directions/v2:computeRoutes).
@@ -9,11 +17,18 @@ import { ConfigService } from '@nestjs/config';
  * is present, which made multi-stop ETAs fall back to free-flow estimates.
  * Routes v2 returns traffic-aware leg durations together with optimized
  * waypoint ordering in a single call.
+ *
+ * Responses are cached for 5 minutes keyed on rounded coordinates and
+ * departure-time bucket. Concurrent identical requests still each issue an
+ * upstream call (no in-flight dedup yet — that lands with BullMQ in Phase 1);
+ * the cache only collapses sequential repeats. Even so, in practice the
+ * thundering herd of `findAvailableTrips` previews drops dramatically.
  */
 @Injectable()
 export class DirectionsService {
   private readonly logger = new Logger(DirectionsService.name);
   private readonly apiKey: string;
+  private readonly cache = new RouteCache<RouteResult>(500, 5 * 60 * 1000);
 
   private static readonly ENDPOINT = 'https://routes.googleapis.com/directions/v2:computeRoutes';
   // Routes v2 requires an explicit field mask; omitting fields here means they won't come back.
@@ -24,17 +39,25 @@ export class DirectionsService {
     'routes.optimizedIntermediateWaypointIndex',
   ].join(',');
 
+  // ~1m precision is plenty for trip routing; finer rounding causes near-identical
+  // queries (e.g. 1cm apart) to miss the cache for no functional benefit.
+  private static readonly COORD_PRECISION = 5;
+  // Bucket departure_time to 5-minute windows so repeated previews collide.
+  private static readonly DEPARTURE_BUCKET_MS = 5 * 60 * 1000;
+
   constructor(private readonly configService: ConfigService) {
     this.apiKey = this.configService.getOrThrow<string>('GOOGLE_MAPS_KEY');
   }
 
-  async getRoute(waypoints: { lat: number; lng: number }[], departureTime?: Date): Promise<{
-    polylinePoints: [number, number][];
-    durationSeconds: number;
-    legDurations: number[];
-    waypointOrder: number[];
-  }> {
+  async getRoute(waypoints: { lat: number; lng: number }[], departureTime?: Date): Promise<RouteResult> {
     if (waypoints.length < 2) throw new Error('Se necesitan al menos 2 puntos');
+
+    const cacheKey = this.buildCacheKey(waypoints, departureTime);
+    const hit = this.cache.get(cacheKey);
+    if (hit) {
+      this.logger.debug(`Routes cache HIT for key: ${cacheKey}`);
+      return hit;
+    }
 
     const origin = waypoints[0];
     const destination = waypoints[waypoints.length - 1];
@@ -76,7 +99,21 @@ export class DirectionsService {
     const waypointOrder: number[] = route.optimizedIntermediateWaypointIndex
       ?? intermediates.map((_, i) => i);
 
-    return { polylinePoints, durationSeconds, legDurations, waypointOrder };
+    const result: RouteResult = { polylinePoints, durationSeconds, legDurations, waypointOrder };
+    this.cache.set(cacheKey, result);
+    return result;
+  }
+
+  private buildCacheKey(waypoints: { lat: number; lng: number }[], departureTime?: Date): string {
+    const round = (n: number) => n.toFixed(DirectionsService.COORD_PRECISION);
+    const coords = waypoints.map(w => `${round(w.lat)},${round(w.lng)}`).join('|');
+    // Bucket the departure window so repeated requests within the same 5-min slice hit cache.
+    // For "now"/past values we still bucket on Date.now() so adjacent calls collide.
+    const refMs = departureTime && departureTime.getTime() > Date.now()
+      ? departureTime.getTime()
+      : Date.now();
+    const bucket = Math.floor(refMs / DirectionsService.DEPARTURE_BUCKET_MS);
+    return `${coords}#${bucket}`;
   }
 
   private toLatLngWaypoint(p: { lat: number; lng: number }) {
