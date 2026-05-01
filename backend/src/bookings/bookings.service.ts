@@ -11,10 +11,17 @@ import { BookingResponseDto } from './dto/booking-response.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { DirectionsService } from '../geo/directions.service';
 import { GeoService } from '../geo/geo.service';
+import { KeyedMutex } from '../common/keyed-mutex';
 
 @Injectable()
 export class BookingsService {
   private readonly logger = new Logger(BookingsService.name);
+
+  // Serializes route recalculation per trip: two bookings accepted at
+  // virtually the same instant would otherwise both load passengerWaypoints
+  // pre-write and the second save would clobber the first. In-memory only;
+  // Phase 1 swaps this for a Redis lock when we run multiple instances.
+  private readonly recalcMutex = new KeyedMutex();
 
   constructor(
     @InjectRepository(Booking)
@@ -144,71 +151,99 @@ export class BookingsService {
   }
 
   private async recalculateRoute(trip: Trip, passengerId: string, destLat: number, destLng: number): Promise<void> {
-    try {
-      const coords: number[][] = trip.routePolyline?.coordinates;
-      if (!coords?.length || coords.length < 2) return;
+    // Lock by tripId so concurrent recalculations for the same trip serialize.
+    // Without this, two near-simultaneous accepts each read passengerWaypoints
+    // pre-write and the second save() overwrites the first.
+    await this.recalcMutex.run(trip.id, async () => {
+      try {
+        // Re-load the trip inside the lock — relying on the caller's snapshot
+        // means we'd miss updates committed by the previous lock holder.
+        const fresh = await this.tripsRepository.findOne({ where: { id: trip.id } });
+        if (!fresh) return;
 
-      // Use pinned coordinates to prevent drift across recalculations; fall back to polyline for legacy trips
-      const origin = trip.tripOrigin
-        ?? { lat: coords[0][1], lng: coords[0][0] };
-      const finalDest = trip.finalDestination
-        ?? { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
-      const existingWaypoints = (trip.passengerWaypoints ?? []).map(w => ({ lat: w.lat, lng: w.lng }));
-      const allWaypoints = [origin, ...existingWaypoints, { lat: destLat, lng: destLng }, finalDest];
+        const coords: number[][] = fresh.routePolyline?.coordinates;
+        if (!coords?.length || coords.length < 2) return;
 
-      // Build the full intermediate list (existing stops + new passenger).
-      // Filter out any pre-existing waypoint for this passenger so re-entrant calls
-      // (double-tap, retries, race conditions) cannot duplicate the same stop.
-      const intermediates = [
-        ...(trip.passengerWaypoints ?? []).filter(w => w.passengerId !== passengerId),
-        { passengerId, lat: destLat, lng: destLng },
-      ];
-      const { polylinePoints, legDurations, waypointOrder } = await this.directionsService.getRoute(allWaypoints, new Date(trip.departureTime));
-      trip.routePolyline = this.geoService.createLineString(polylinePoints);
-      // Apply Google's optimized order so the saved waypoints match the actual driving sequence
-      trip.passengerWaypoints = waypointOrder.length === intermediates.length
-        ? waypointOrder.map(i => intermediates[i])
-        : intermediates;
-      trip.legDurationsSeconds = legDurations;
-      await this.tripsRepository.save(trip);
+        // Use pinned coordinates to prevent drift across recalculations; fall back to polyline for legacy trips
+        const origin = fresh.tripOrigin
+          ?? { lat: coords[0][1], lng: coords[0][0] };
+        const finalDest = fresh.finalDestination
+          ?? { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
 
-      // Notify all active passengers to refetch — avoids stale ETA computed server-side
-      const activeBookings = await this.bookingsRepository.find({
-        where: { trip: { id: trip.id }, status: In([BookingStatus.PENDING, BookingStatus.ACCEPTED]) },
-        relations: ['passenger'],
-      });
-      for (const b of activeBookings) {
-        this.notificationsService.notifyPassengerRouteUpdated(b.passenger.id, { tripId: trip.id });
+        // Build the full intermediate list (existing stops + new passenger).
+        // Filter out any pre-existing waypoint for this passenger so re-entrant calls
+        // (double-tap, retries, race conditions) cannot duplicate the same stop.
+        const intermediates = [
+          ...(fresh.passengerWaypoints ?? []).filter(w => w.passengerId !== passengerId),
+          { passengerId, lat: destLat, lng: destLng },
+        ];
+        const allWaypoints = [origin, ...intermediates.map(w => ({ lat: w.lat, lng: w.lng })), finalDest];
+
+        const { polylinePoints, legDurations, waypointOrder } = await this.directionsService.getRoute(allWaypoints, new Date(fresh.departureTime));
+        fresh.routePolyline = this.geoService.createLineString(polylinePoints);
+        // Apply Google's optimized order so the saved waypoints match the actual driving sequence
+        fresh.passengerWaypoints = waypointOrder.length === intermediates.length
+          ? waypointOrder.map(i => intermediates[i])
+          : intermediates;
+        fresh.legDurationsSeconds = legDurations;
+        await this.tripsRepository.save(fresh);
+
+        // Mutate the caller's reference so its post-recalc reads (mapToResponseDto) see fresh data.
+        trip.routePolyline = fresh.routePolyline;
+        trip.passengerWaypoints = fresh.passengerWaypoints;
+        trip.legDurationsSeconds = fresh.legDurationsSeconds;
+
+        // Notify all active passengers to refetch — avoids stale ETA computed server-side
+        const activeBookings = await this.bookingsRepository.find({
+          where: { trip: { id: fresh.id }, status: In([BookingStatus.PENDING, BookingStatus.ACCEPTED]) },
+          relations: ['passenger'],
+        });
+        for (const b of activeBookings) {
+          this.notificationsService.notifyPassengerRouteUpdated(b.passenger.id, { tripId: fresh.id });
+        }
+      } catch (e) {
+        this.logger.error(`Error recalculando ruta para viaje ${trip.id}: ${e.message}`);
       }
-    } catch (e) {
-      this.logger.error(`Error recalculando ruta para viaje ${trip.id}: ${e.message}`);
-    }
+    });
   }
 
   private async removePassengerFromRoute(trip: Trip, passengerId: string): Promise<void> {
-    try {
-      const remainingWaypoints = (trip.passengerWaypoints ?? []).filter(w => w.passengerId !== passengerId);
-      const coords: number[][] = trip.routePolyline?.coordinates;
-      if (!coords?.length || coords.length < 2) return;
+    // Same lock as recalculateRoute: cancellation and acceptance can interleave
+    // (driver accepts another passenger while one cancels) and both rewrite
+    // passengerWaypoints. Serializing both paths through the same mutex is safer
+    // than partial guarding.
+    await this.recalcMutex.run(trip.id, async () => {
+      try {
+        const fresh = await this.tripsRepository.findOne({ where: { id: trip.id } });
+        if (!fresh) return;
 
-      // Use pinned coordinates to prevent drift across recalculations; fall back to polyline for legacy trips
-      const origin = trip.tripOrigin
-        ?? { lat: coords[0][1], lng: coords[0][0] };
-      const finalDest = trip.finalDestination
-        ?? { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
-      const waypointList = [origin, ...remainingWaypoints.map(w => ({ lat: w.lat, lng: w.lng })), finalDest];
+        const remainingWaypoints = (fresh.passengerWaypoints ?? []).filter(w => w.passengerId !== passengerId);
+        const coords: number[][] = fresh.routePolyline?.coordinates;
+        if (!coords?.length || coords.length < 2) return;
 
-      const { polylinePoints, legDurations, waypointOrder } = await this.directionsService.getRoute(waypointList, new Date(trip.departureTime));
-      trip.routePolyline = this.geoService.createLineString(polylinePoints);
-      // Re-apply optimized order after removal
-      trip.passengerWaypoints = waypointOrder.length === remainingWaypoints.length
-        ? waypointOrder.map(i => remainingWaypoints[i])
-        : remainingWaypoints;
-      trip.legDurationsSeconds = legDurations;
-      await this.tripsRepository.save(trip);
-    } catch (e) {
-      this.logger.error(`Error eliminando parada tras cancelación en viaje ${trip.id}: ${e.message}`);
-    }
+        // Use pinned coordinates to prevent drift across recalculations; fall back to polyline for legacy trips
+        const origin = fresh.tripOrigin
+          ?? { lat: coords[0][1], lng: coords[0][0] };
+        const finalDest = fresh.finalDestination
+          ?? { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
+        const waypointList = [origin, ...remainingWaypoints.map(w => ({ lat: w.lat, lng: w.lng })), finalDest];
+
+        const { polylinePoints, legDurations, waypointOrder } = await this.directionsService.getRoute(waypointList, new Date(fresh.departureTime));
+        fresh.routePolyline = this.geoService.createLineString(polylinePoints);
+        // Re-apply optimized order after removal
+        fresh.passengerWaypoints = waypointOrder.length === remainingWaypoints.length
+          ? waypointOrder.map(i => remainingWaypoints[i])
+          : remainingWaypoints;
+        fresh.legDurationsSeconds = legDurations;
+        await this.tripsRepository.save(fresh);
+
+        trip.routePolyline = fresh.routePolyline;
+        trip.passengerWaypoints = fresh.passengerWaypoints;
+        trip.legDurationsSeconds = fresh.legDurationsSeconds;
+      } catch (e) {
+        this.logger.error(`Error eliminando parada tras cancelación en viaje ${trip.id}: ${e.message}`);
+      }
+    });
   }
 
   async rejectBooking(bookingId: string, driverId: string): Promise<BookingResponseDto> {
