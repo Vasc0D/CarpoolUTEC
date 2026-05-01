@@ -1,6 +1,6 @@
 import {
     IsBoolean, IsDateString, IsNotEmpty, IsArray, ArrayMinSize,
-    IsOptional, IsString, IsNumber, IsInt, IsJSON, Min, Max, MaxLength,
+    IsOptional, IsNumber, IsInt, Min, Max,
     registerDecorator, ValidationOptions,
 } from 'class-validator';
 
@@ -76,9 +76,6 @@ export class CreateTripDto {
     @IsOptional()
     pricePerSeat?: number;
 
-    // M-2: ensures the stored meetingPoint is always parseable JSON —
-    // rejects plain strings that would silently corrupt downstream GeoJSON parsing
-    @IsJSON()
-    @MaxLength(500)
-    meetingPoint: string;
+    // meetingPoint removed: pickup is fixed at the UTEC car exit (see
+    // backend/src/trips/constants.ts → PICKUP_POINT). Clients must not send it.
 }

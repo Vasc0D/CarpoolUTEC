@@ -92,7 +92,6 @@ export class TripsService {
       availableSeats: createTripDto.availableSeats ?? user.vehicle.capacity,
       maxDetourMinutes: createTripDto.maxDetourMinutes ?? 5,
       pricePerSeat: createTripDto.pricePerSeat ?? 0,
-      meetingPoint: createTripDto.meetingPoint,
       detourEnabled: createTripDto.detourEnabled ?? false,
       originalDurationSeconds,
       legDurationsSeconds,

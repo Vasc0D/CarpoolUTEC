@@ -25,7 +25,6 @@ interface TripMarker {
     driver: { id: string; name: string; vehicle?: { model: string; color: string; brand: string; plate: string } };
     availableSeats: number;
     departureTime: string;
-    meetingPoint: string | null;
     routePolyline: { coordinates: number[][] };
     pricePerSeat: number;
     originalDurationSeconds?: number;
@@ -33,11 +32,6 @@ interface TripMarker {
     distanceToDestination?: number;
     matchType?: 'exact' | 'near' | 'detour';
     detourMinutes?: number;
-}
-
-interface MeetingPointCoords {
-    latitude: number;
-    longitude: number;
 }
 
 interface ActiveBooking {
@@ -75,16 +69,6 @@ interface DriverTripSummary {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-const parseMeetingPoint = (meetingPoint: string | null): MeetingPointCoords | null => {
-    if (!meetingPoint) return null;
-    try {
-        const geoJson = typeof meetingPoint === 'string' ? JSON.parse(meetingPoint) : meetingPoint;
-        return { latitude: geoJson.coordinates[1], longitude: geoJson.coordinates[0] };
-    } catch {
-        return null;
-    }
-};
 
 const formatTime = (iso: string): string => {
     try {
@@ -173,7 +157,6 @@ const TripSheet: React.FC<TripSheetProps> = ({
 
     if (!trip) return null;
 
-    const meetingCoords = parseMeetingPoint(trip.meetingPoint);
     const statusCfg = myBooking ? BOOKING_STATUS_CONFIG[myBooking.status] : null;
 
     return (

@@ -10,6 +10,7 @@ import type { Socket } from 'socket.io-client';
 import { axiosClient } from '../api/axiosClient';
 import { createSocket } from '../api/socketClient';
 import { useAuthStore } from '../store/authStore';
+import { PICKUP_POINT } from '../constants/pickupPoint';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 
 type ActiveTripRouteProp = RouteProp<RootStackParamList, 'ActiveTrip'>;
@@ -19,7 +20,6 @@ type ActiveTripRouteProp = RouteProp<RootStackParamList, 'ActiveTrip'>;
 interface TripDetail {
     id: string;
     departureTime: string;
-    meetingPoint: string | null;
     driver: { id: string; name: string };
     routePolyline: { coordinates: number[][] } | null;
     legDurationsSeconds?: number[] | null;
@@ -222,14 +222,12 @@ export const ActiveTripScreen = () => {
                         </View>
                     </View>
 
-                    {trip.meetingPoint && (
-                        <View style={styles.meetingRow}>
-                            <Ionicons name="location-outline" size={14} color="#10B981" />
-                            <Text style={styles.meetingText} numberOfLines={2}>
-                                Frente a la salida de carros UTEC
-                            </Text>
-                        </View>
-                    )}
+                    <View style={styles.meetingRow}>
+                        <Ionicons name="location-outline" size={14} color="#10B981" />
+                        <Text style={styles.meetingText} numberOfLines={2}>
+                            {PICKUP_POINT.label}
+                        </Text>
+                    </View>
 
                     {!driverCoords && (
                         <View style={styles.waitingRow}>

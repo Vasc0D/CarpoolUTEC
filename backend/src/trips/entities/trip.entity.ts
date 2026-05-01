@@ -72,8 +72,9 @@ export class Trip {
   @Column({ type: 'decimal', precision: 6, scale: 2, default: 0 })
   pricePerSeat: number;
 
-  @Column({ type: 'text', nullable: true })
-  meetingPoint: string;
+  // meetingPoint removed in migration 1745700000000 — pickup is now the fixed
+  // PICKUP_POINT constant (see src/trips/constants.ts). If multi-campus support
+  // is added later, replace the constant with a `pickupPointId` FK.
 
   @OneToMany(() => Booking, booking => booking.trip)
   bookings: Booking[];

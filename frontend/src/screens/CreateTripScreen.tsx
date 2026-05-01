@@ -12,8 +12,6 @@ import { axiosClient } from '../api/axiosClient';
 const { width, height } = Dimensions.get('window');
 
 const UTEC_COORDS = { latitude: -12.135, longitude: -77.023 };
-// Q-2: precise exit coordinates kept as a single source of truth (used for meeting point)
-const UTEC_EXIT_COORDS = { latitude: -12.135570, longitude: -77.021908 };
 const GOOGLE_MAPS_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_KEY || 'DUMMY_KEY';
 
 export const CreateTripScreen = () => {
@@ -53,7 +51,6 @@ export const CreateTripScreen = () => {
                 detourEnabled,
                 maxDetourMinutes: detourEnabled ? detour : 0,
                 autoAccept,
-                meetingPoint: JSON.stringify({ type: 'Point', coordinates: [UTEC_EXIT_COORDS.longitude, UTEC_EXIT_COORDS.latitude] }),
             });
 
             Alert.alert('¡Éxito!', 'Tu viaje ha sido publicado correctamente.', [
