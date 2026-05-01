@@ -111,6 +111,7 @@ export class TripsService {
     lng: number,
     destLat?: number,
     destLng?: number,
+    passengerId?: string,
   ): Promise<TripSearchResult[]> {
     // B-5: getDWithinCondition now returns [condition, params] — spread with ...
     // 'pickup' key → pickupLat / pickupLng / pickupRadius params
@@ -173,7 +174,14 @@ export class TripsService {
               ?? { lat: coords[0][1], lng: coords[0][0] };
             const finalDest = trip.finalDestination
               ?? { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
-            const existingWaypoints = (trip.passengerWaypoints ?? []).map(w => ({ lat: w.lat, lng: w.lng }));
+            // Exclude the requesting passenger's own waypoint if they already have an active
+            // booking on this trip — without this, a passenger searching again after booking
+            // would feed Routes API a duplicated waypoint (their existing stored stop +
+            // their search destination), which previously surfaced as the "two identical
+            // intermediates with optimizeWaypointOrder:true" calls in production logs.
+            const existingWaypoints = (trip.passengerWaypoints ?? [])
+              .filter(w => !passengerId || w.passengerId !== passengerId)
+              .map(w => ({ lat: w.lat, lng: w.lng }));
             const allWaypoints = [origin, ...existingWaypoints, { lat: destLat, lng: destLng }, finalDest];
 
             const { durationSeconds } = await this.directionsService.getRoute(allWaypoints, new Date(trip.departureTime));
@@ -403,12 +411,13 @@ export class TripsService {
     tripId: string,
     destLat: number,
     destLng: number,
+    passengerId?: string,
   ): Promise<{ latitude: number; longitude: number; routeToDropoff: { latitude: number; longitude: number }[]; isDetour: boolean }> {
     const trip = await this.tripsRepository.findOne({ where: { id: tripId } });
     if (!trip) throw new NotFoundException('Viaje no encontrado');
 
     if (trip.detourEnabled) {
-      return this.previewRouteWithDetour(trip, destLat, destLng);
+      return this.previewRouteWithDetour(trip, destLat, destLng, passengerId);
     }
 
     const result = await this.tripsRepository.query(
@@ -452,6 +461,7 @@ export class TripsService {
     trip: Trip,
     destLat: number,
     destLng: number,
+    passengerId?: string,
   ): Promise<{ latitude: number; longitude: number; routeToDropoff: { latitude: number; longitude: number }[]; isDetour: boolean }> {
     const coords: number[][] = trip.routePolyline?.coordinates;
     if (!coords?.length || coords.length < 2) throw new NotFoundException('No se pudo calcular la ruta');
@@ -461,7 +471,10 @@ export class TripsService {
       ?? { lat: coords[0][1], lng: coords[0][0] };
     const finalDest = trip.finalDestination
       ?? { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
-    const existingWaypoints = (trip.passengerWaypoints ?? []).map(w => ({ lat: w.lat, lng: w.lng }));
+    // Exclude the requesting passenger's existing waypoint (see findAvailableTrips comment).
+    const existingWaypoints = (trip.passengerWaypoints ?? [])
+      .filter(w => !passengerId || w.passengerId !== passengerId)
+      .map(w => ({ lat: w.lat, lng: w.lng }));
     const allWaypoints = [origin, ...existingWaypoints, { lat: destLat, lng: destLng }, finalDest];
 
     const { polylinePoints } = await this.directionsService.getRoute(allWaypoints);

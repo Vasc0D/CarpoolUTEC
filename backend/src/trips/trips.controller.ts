@@ -15,6 +15,7 @@ export class TripsController {
 
   @Get()
   findAll(
+    @Req() req,
     @Query('lat') lat: string,
     @Query('lng') lng: string,
     @Query('destLat') destLat?: string,
@@ -39,7 +40,7 @@ export class TripsController {
         throw new BadRequestException('destLng debe ser un número entre -180 y 180');
     }
 
-    return this.tripsService.findAvailableTrips(parsedLat, parsedLng, parsedDestLat, parsedDestLng);
+    return this.tripsService.findAvailableTrips(parsedLat, parsedLng, parsedDestLat, parsedDestLng, req.user.id);
   }
 
   @Get('stops-coverage')
@@ -85,6 +86,7 @@ export class TripsController {
     @Param('tripId', ParseUUIDPipe) tripId: string,
     @Query('destLat') destLat: string,
     @Query('destLng') destLng: string,
+    @Req() req,
   ) {
     const lat = parseFloat(destLat);
     const lng = parseFloat(destLng);
@@ -92,7 +94,7 @@ export class TripsController {
       throw new BadRequestException('destLat debe ser un número entre -90 y 90');
     if (isNaN(lng) || lng < -180 || lng > 180)
       throw new BadRequestException('destLng debe ser un número entre -180 y 180');
-    return this.tripsService.getClosestPoint(tripId, lat, lng);
+    return this.tripsService.getClosestPoint(tripId, lat, lng, req.user.id);
   }
 
   // C-2: ParseUUIDPipe rejects non-UUID strings with a 400 before hitting the DB
