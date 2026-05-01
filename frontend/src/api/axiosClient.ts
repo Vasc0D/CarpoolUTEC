@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { Alert } from 'react-native';
+import * as Crypto from 'expo-crypto';
 import { useAuthStore } from '../store/authStore';
 
 // P-6: URL from env — avoids hardcoded localhost in shipped code
@@ -16,6 +17,18 @@ axiosClient.interceptors.request.use(
         if (token) {
             config.headers.Authorization = `Bearer ${token}`;
         }
+
+        // Auto-attach Idempotency-Key on mutating verbs so the backend
+        // interceptor can dedupe network-level retries and accidental
+        // re-fires (StrictMode double-mount, etc.). Each axios call gets a
+        // fresh UUID; an explicit caller-provided key is preserved when a
+        // flow needs to dedupe across multiple axios.post invocations.
+        const method = (config.method ?? '').toUpperCase();
+        const isMutating = method === 'POST' || method === 'PATCH' || method === 'DELETE';
+        if (isMutating && !config.headers['Idempotency-Key']) {
+            config.headers['Idempotency-Key'] = Crypto.randomUUID();
+        }
+
         return config;
     },
     (error) => Promise.reject(error),
