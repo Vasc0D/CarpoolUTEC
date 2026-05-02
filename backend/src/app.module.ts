@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { BullModule } from '@nestjs/bullmq';
 
@@ -14,11 +13,11 @@ import { BookingsModule } from './bookings/bookings.module';
 import { AuthModule } from './auth/auth.module';
 import { RedisModule } from './common/redis.module';
 import { RouteRecalcModule } from './route-recalc/route-recalc.module';
+import { MaintenanceModule } from './maintenance/maintenance.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
-    ScheduleModule.forRoot(),
 
     // Rate limiting: max 60 requests per minute per IP globally
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 60 }]),
@@ -68,6 +67,10 @@ import { RouteRecalcModule } from './route-recalc/route-recalc.module';
     RouteRecalcModule,
     BookingsModule,
     AuthModule,
+    // Periodic trip-maintenance jobs (auto-cancel empty trips, auto-remove
+    // no-shows). Replaces @nestjs/schedule with BullMQ schedulers so only
+    // one backend instance fires per tick when running multiple pods.
+    MaintenanceModule,
   ],
   providers: [
     // Apply rate limiting globally via DI (works with guards that need injected services)

@@ -4,7 +4,6 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, In, LessThan, Repository } from 'typeorm';
-import { Cron } from '@nestjs/schedule';
 import { Trip, TripStatus } from './entities/trip.entity';
 import { CreateTripDto } from './dto/create-trip.dto';
 import { UsersService } from '../users/users.service';
@@ -325,7 +324,10 @@ export class TripsService {
     });
   }
 
-  @Cron('* * * * *')
+  // Triggered every minute by MaintenanceProcessor (BullMQ scheduler).
+  // Was @Cron('* * * * *') before Phase 1 — moving the trigger to BullMQ
+  // means only one instance fires per tick cluster-wide, so we no longer
+  // double-cancel trips when running >1 backend pod.
   async autoCancelEmptyTrips(): Promise<void> {
     try {
       const overdueTrips = await this.tripsRepository.find({
@@ -364,7 +366,8 @@ export class TripsService {
     }
   }
 
-  @Cron('* * * * *')
+  // Triggered every minute by MaintenanceProcessor (BullMQ scheduler). See
+  // autoCancelEmptyTrips above for the rationale on the move from @Cron.
   async autoRemoveNoShows(): Promise<void> {
     try {
       const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
