@@ -8,11 +8,14 @@ import { UsersModule } from '../users/users.module';
 import { GeoModule } from '../geo/geo.module';
 import { Booking } from './entities/booking.entity';
 import { Trip } from '../trips/entities/trip.entity';
+import { KeyedMutex } from '../common/keyed-mutex';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Booking, Trip]), TripsModule, NotificationsModule, UsersModule, GeoModule],
   controllers: [BookingsController],
-  providers: [BookingsService],
+  // KeyedMutex needs Redis (provided globally by RedisModule) so it lives in
+  // providers here rather than as `new KeyedMutex()`.
+  providers: [BookingsService, KeyedMutex],
   exports: [BookingsService]
 })
 export class BookingsModule { }

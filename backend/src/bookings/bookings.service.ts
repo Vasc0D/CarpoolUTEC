@@ -18,12 +18,6 @@ import { KeyedMutex } from '../common/keyed-mutex';
 export class BookingsService {
   private readonly logger = new Logger(BookingsService.name);
 
-  // Serializes route recalculation per trip: two bookings accepted at
-  // virtually the same instant would otherwise both load passengerWaypoints
-  // pre-write and the second save would clobber the first. In-memory only;
-  // Phase 1 swaps this for a Redis lock when we run multiple instances.
-  private readonly recalcMutex = new KeyedMutex();
-
   constructor(
     @InjectRepository(Booking)
     private readonly bookingsRepository: Repository<Booking>,
@@ -34,6 +28,9 @@ export class BookingsService {
     private readonly directionsService: DirectionsService,
     private readonly geoService: GeoService,
     private readonly dataSource: DataSource,
+    // Distributed lock (Redis SETNX). Serializes recalcs per tripId across
+    // every backend instance. Replaces the in-memory KeyedMutex used in Phase 0.
+    private readonly recalcMutex: KeyedMutex,
   ) {}
 
   async solicitSeat(tripId: string, passengerId: string, destLat?: number, destLng?: number): Promise<BookingResponseDto> {
