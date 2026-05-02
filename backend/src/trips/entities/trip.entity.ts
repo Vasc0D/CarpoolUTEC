@@ -1,9 +1,10 @@
 import {
   Column, CreateDateColumn, Entity, Index,
-  ManyToOne, OneToMany, PrimaryGeneratedColumn, UpdateDateColumn,
+  JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn, UpdateDateColumn,
 } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
 import { Booking } from '../../bookings/entities/booking.entity';
+import { TripRoutePlan } from './trip-route-plan.entity';
 
 export enum TripStatus {
   SCHEDULED = 'SCHEDULED',
@@ -78,6 +79,23 @@ export class Trip {
 
   @OneToMany(() => Booking, booking => booking.trip)
   bookings: Booking[];
+
+  // Phase 2: pointer to the latest ACTIVE TripRoutePlan. Reads still hit the
+  // legacy columns above (routePolyline, passengerWaypoints, etc.) until the
+  // dual-write commit lands; this FK is populated alongside those writes
+  // and consumers will switch over in a later commit. Nullable until every
+  // existing trip has been backfilled.
+  @ManyToOne(() => TripRoutePlan, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'currentRoutePlanId' })
+  currentRoutePlan: TripRoutePlan | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  currentRoutePlanId: string | null;
+
+  // Inverse of TripRoutePlan.trip — convenience for history/audit reads;
+  // hot-path code uses currentRoutePlanId directly.
+  @OneToMany(() => TripRoutePlan, plan => plan.trip)
+  routePlans: TripRoutePlan[];
 
   // B-3: audit timestamps — absent from original entity
   @CreateDateColumn()
