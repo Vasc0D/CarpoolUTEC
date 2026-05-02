@@ -13,6 +13,7 @@ import { GeoModule } from './geo/geo.module';
 import { BookingsModule } from './bookings/bookings.module';
 import { AuthModule } from './auth/auth.module';
 import { RedisModule } from './common/redis.module';
+import { RouteRecalcModule } from './route-recalc/route-recalc.module';
 
 @Module({
   imports: [
@@ -61,6 +62,10 @@ import { RedisModule } from './common/redis.module';
     TripsModule,
     NotificationsModule,
     GeoModule,
+    // RouteRecalcModule must be imported BEFORE BookingsModule since the
+    // latter depends on RouteRecalcQueue. Also registers the worker, which
+    // starts processing jobs at bootstrap.
+    RouteRecalcModule,
     BookingsModule,
     AuthModule,
   ],

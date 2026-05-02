@@ -12,6 +12,7 @@ import type {
   TripAutoCanceledPayload,
   RouteUpdatedPayload,
   EtaUpdatedPayload,
+  BookingRouteFailedPayload,
 } from './notifications.types';
 
 @Injectable()
@@ -70,5 +71,9 @@ export class NotificationsService {
 
   notifyTripPublished(): void {
     this.notificationsGateway.server.emit('trip_published');
+  }
+
+  notifyBookingRouteFailed(passengerId: string, payload: BookingRouteFailedPayload): void {
+    this.notificationsGateway.server.to(passengerId).emit('booking_route_failed', payload);
   }
 }

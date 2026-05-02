@@ -696,6 +696,24 @@ export const HomeScreen = () => {
             fetchMyActiveBookingRef.current();
         });
 
+        // Phase 1: emitted when the async route-recalc worker exhausts its
+        // retries — the booking is auto-cancelled by the saga and we surface
+        // a clear toast so the user knows it wasn't a driver rejection.
+        socket.on('booking_route_failed', (data: { bookingId: string; tripId: string; reason: string }) => {
+            setMyActiveBooking(prev => {
+                if (prev?.id === data.bookingId) {
+                    setDropoffPoint(null);
+                    setRouteToDropoff([]);
+                    return null;
+                }
+                return prev;
+            });
+            Alert.alert(
+                'No pudimos calcular la ruta',
+                'Tuvimos problemas para incluir tu parada en este viaje. Intenta nuevamente en unos minutos o elige otro viaje.',
+            );
+        });
+
         return () => { socket.disconnect(); socketRef.current = null; };
     }, [appMode, token]); // P-1: fetchStopsCoverage / fetchTrips accessed via stable refs — omitting them prevents socket reconnect on destination change
 

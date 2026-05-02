@@ -5,17 +5,22 @@ import { BookingsController } from './bookings.controller';
 import { TripsModule } from '../trips/trips.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { UsersModule } from '../users/users.module';
-import { GeoModule } from '../geo/geo.module';
 import { Booking } from './entities/booking.entity';
 import { Trip } from '../trips/entities/trip.entity';
-import { KeyedMutex } from '../common/keyed-mutex';
+import { RouteRecalcModule } from '../route-recalc/route-recalc.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Booking, Trip]), TripsModule, NotificationsModule, UsersModule, GeoModule],
+  imports: [
+    TypeOrmModule.forFeature([Booking, Trip]),
+    TripsModule,
+    NotificationsModule,
+    UsersModule,
+    // BookingsService uses RouteRecalcQueue.enqueue() to defer Routes API work
+    // off the request thread; the queue is exported by RouteRecalcModule.
+    RouteRecalcModule,
+  ],
   controllers: [BookingsController],
-  // KeyedMutex needs Redis (provided globally by RedisModule) so it lives in
-  // providers here rather than as `new KeyedMutex()`.
-  providers: [BookingsService, KeyedMutex],
+  providers: [BookingsService],
   exports: [BookingsService]
 })
 export class BookingsModule { }
