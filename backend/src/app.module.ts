@@ -52,8 +52,17 @@ import { MaintenanceModule } from './maintenance/maintenance.module';
         password: config.getOrThrow<string>('DB_PASSWORD'),
         database: config.getOrThrow<string>('DB_NAME'),
         autoLoadEntities: true,
-        // Only auto-sync schema in development; never in production
-        synchronize: config.get<string>('NODE_ENV') !== 'production',
+        // Phase 2 turns off synchronize across all envs — the upcoming
+        // TripRoutePlan refactor drops several columns from `trips` and
+        // doing that via auto-sync is unsafe (data loss with no audit).
+        // All schema changes now go through src/migrations/*.ts.
+        synchronize: false,
+        // Auto-apply pending migrations on bootstrap. All existing migrations
+        // use `IF NOT EXISTS` / `IF EXISTS` so this is safe to run against a
+        // schema that was previously synchronize-managed — the migration
+        // history table starts empty and re-applies become no-ops.
+        migrations: [__dirname + '/migrations/*{.ts,.js}'],
+        migrationsRun: true,
       }),
     }),
 
