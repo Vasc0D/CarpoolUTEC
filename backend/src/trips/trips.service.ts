@@ -3,8 +3,10 @@ import {
   Injectable, Logger, NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Between, In, LessThan, Repository } from 'typeorm';
+import { Between, DataSource, EntityManager, In, LessThan, Repository } from 'typeorm';
 import { Trip, TripStatus } from './entities/trip.entity';
+import { TripRoutePlan, RoutePlanStatus, RoutingPreference } from './entities/trip-route-plan.entity';
+import { TripRouteLeg } from './entities/trip-route-leg.entity';
 import { CreateTripDto } from './dto/create-trip.dto';
 import { UsersService } from '../users/users.service';
 import { Booking, BookingStatus } from '../bookings/entities/booking.entity';
@@ -28,10 +30,13 @@ export class TripsService {
     private readonly tripsRepository: Repository<Trip>,
     @InjectRepository(Booking)
     private readonly bookingsRepository: Repository<Booking>,
+    @InjectRepository(TripRoutePlan)
+    private readonly plansRepository: Repository<TripRoutePlan>,
     private readonly usersService: UsersService,
     private readonly notificationsService: NotificationsService,
     private readonly geoService: GeoService,
     private readonly directionsService: DirectionsService,
+    private readonly dataSource: DataSource,
   ) { }
 
   async create(userId: string, createTripDto: CreateTripDto): Promise<Trip> {
@@ -83,25 +88,97 @@ export class TripsService {
       this.logger.warn(`DirectionsService falló al crear viaje, usando ruta del frontend: ${e.message}`);
     }
 
-    const trip = this.tripsRepository.create({
-      driver: user,
-      routePolyline: this.geoService.createLineString(finalRoute),
-      departureTime: new Date(createTripDto.departureTime),
-      autoAccept: createTripDto.autoAccept || false,
-      availableSeats: createTripDto.availableSeats ?? user.vehicle.capacity,
-      maxDetourMinutes: createTripDto.maxDetourMinutes ?? 5,
-      pricePerSeat: createTripDto.pricePerSeat ?? 0,
-      detourEnabled: createTripDto.detourEnabled ?? false,
-      originalDurationSeconds,
-      legDurationsSeconds,
-      status: TripStatus.SCHEDULED,
-      tripOrigin: { lat: origin.lat, lng: origin.lng },
-      finalDestination: { lat: destination.lat, lng: destination.lng },
+    const lineString = this.geoService.createLineString(finalRoute);
+
+    // Phase 2 dual-write: persist the trip AND its initial v=1 TripRoutePlan
+    // in one transaction so currentRoutePlanId is never null on a fresh trip.
+    // Legacy columns (routePolyline, originalDurationSeconds,
+    // legDurationsSeconds, tripOrigin, finalDestination) stay populated for
+    // the dual-write window — readers switch over in a later commit.
+    const saved = await this.dataSource.transaction(async (manager: EntityManager) => {
+      const trip = manager.create(Trip, {
+        driver: user,
+        routePolyline: lineString,
+        departureTime: new Date(createTripDto.departureTime),
+        autoAccept: createTripDto.autoAccept || false,
+        availableSeats: createTripDto.availableSeats ?? user.vehicle.capacity,
+        maxDetourMinutes: createTripDto.maxDetourMinutes ?? 5,
+        pricePerSeat: createTripDto.pricePerSeat ?? 0,
+        detourEnabled: createTripDto.detourEnabled ?? false,
+        originalDurationSeconds,
+        legDurationsSeconds,
+        status: TripStatus.SCHEDULED,
+        tripOrigin: { lat: origin.lat, lng: origin.lng },
+        finalDestination: { lat: destination.lat, lng: destination.lng },
+      });
+      const tripRow = await manager.save(Trip, trip);
+
+      // Skip plan creation if Routes API failed and we have no real
+      // duration data — the recalc worker will produce a real v=1 on the
+      // first booking instead. (Phase 0 fallback warned about this case.)
+      if (originalDurationSeconds > 0 && legDurationsSeconds && legDurationsSeconds.length > 0) {
+        const plan = await manager.save(TripRoutePlan, manager.create(TripRoutePlan, {
+          tripId: tripRow.id,
+          version: 1,
+          encodedPolyline: this.encodePolyline(finalRoute),
+          polylineGeom: lineString,
+          totalDurationSeconds: originalDurationSeconds,
+          computedForDepartureAt: tripRow.departureTime,
+          routingPreference: RoutingPreference.TRAFFIC_AWARE,
+          status: RoutePlanStatus.ACTIVE,
+        }));
+        // Single leg origin → destination on a freshly created trip (no
+        // intermediate passenger waypoints yet).
+        await manager.insert(TripRouteLeg, {
+          planId: plan.id,
+          legIndex: 0,
+          durationSeconds: legDurationsSeconds[0],
+          startLat: origin.lat,
+          startLng: origin.lng,
+          endLat: destination.lat,
+          endLng: destination.lng,
+          passengerDropOffId: null,
+        });
+        await manager.update(Trip, tripRow.id, { currentRoutePlanId: plan.id });
+        tripRow.currentRoutePlanId = plan.id;
+      }
+      return tripRow;
     });
 
-    const saved = await this.tripsRepository.save(trip);
     this.notificationsService.notifyTripPublished();
     return saved;
+  }
+
+  /**
+   * Inverse of DirectionsService.decodePolyline. Duplicated rather than
+   * pulled into a shared helper because there are exactly two callers
+   * (here and the recalc processor) and the encoder is fewer than 20 lines.
+   */
+  private encodePolyline(points: [number, number][]): string {
+    let result = '';
+    let prevLat = 0;
+    let prevLng = 0;
+    for (const [lat, lng] of points) {
+      const latE5 = Math.round(lat * 1e5);
+      const lngE5 = Math.round(lng * 1e5);
+      result += this.encodeSignedNumber(latE5 - prevLat);
+      result += this.encodeSignedNumber(lngE5 - prevLng);
+      prevLat = latE5;
+      prevLng = lngE5;
+    }
+    return result;
+  }
+
+  private encodeSignedNumber(num: number): string {
+    let sgn = num << 1;
+    if (num < 0) sgn = ~sgn;
+    let result = '';
+    while (sgn >= 0x20) {
+      result += String.fromCharCode((0x20 | (sgn & 0x1f)) + 63);
+      sgn >>= 5;
+    }
+    result += String.fromCharCode(sgn + 63);
+    return result;
   }
 
   // C-1: return type is TripSearchResult[] instead of any[]

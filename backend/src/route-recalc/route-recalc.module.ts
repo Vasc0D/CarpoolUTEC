@@ -3,6 +3,8 @@ import { BullModule } from '@nestjs/bullmq';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Booking } from '../bookings/entities/booking.entity';
 import { Trip } from '../trips/entities/trip.entity';
+import { TripRoutePlan } from '../trips/entities/trip-route-plan.entity';
+import { TripRouteLeg } from '../trips/entities/trip-route-leg.entity';
 import { GeoModule } from '../geo/geo.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { KeyedMutex } from '../common/keyed-mutex';
@@ -15,14 +17,14 @@ import { RouteRecalcProcessor } from './route-recalc.processor';
  * recalculation. Imported by BookingsModule (which uses the producer)
  * and registered in AppModule (so the processor starts at bootstrap).
  *
- * Note: the processor needs Trip + Booking repositories directly (not via
- * BookingsService) to avoid a circular import — BookingsService already
- * depends on RouteRecalcQueue, which lives in this module.
+ * Note: the processor needs Trip + Booking + TripRoutePlan repositories
+ * directly (not via BookingsService) to avoid a circular import —
+ * BookingsService already depends on RouteRecalcQueue.
  */
 @Module({
   imports: [
     BullModule.registerQueue({ name: ROUTE_RECALC_QUEUE }),
-    TypeOrmModule.forFeature([Booking, Trip]),
+    TypeOrmModule.forFeature([Booking, Trip, TripRoutePlan, TripRouteLeg]),
     GeoModule,
     NotificationsModule,
   ],
