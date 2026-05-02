@@ -102,10 +102,14 @@ export class BookingsService {
       autoAccepted: isAutoAccept,
     });
 
-    // Reload with fresh trip relations so mapToResponseDto sees updated passengerWaypoints/legDurationsSeconds
+    // Reload with fresh trip + current plan so mapToResponseDto reads from
+    // plan.legs rather than the legacy passengerWaypoints/legDurationsSeconds.
     const freshBooking = await this.bookingsRepository.findOne({
       where: { id: savedBooking.id },
-      relations: ['trip', 'trip.driver', 'trip.driver.vehicle', 'passenger'],
+      relations: [
+        'trip', 'trip.driver', 'trip.driver.vehicle', 'passenger',
+        'trip.currentRoutePlan', 'trip.currentRoutePlan.legs',
+      ],
     });
     return this.mapToResponseDto(freshBooking ?? savedBooking);
   }
@@ -159,10 +163,14 @@ export class BookingsService {
       status: 'ACCEPTED',
     });
 
-    // Reload with fresh trip relations so mapToResponseDto sees updated passengerWaypoints/legDurationsSeconds
+    // Reload with fresh trip + current plan so mapToResponseDto reads from
+    // plan.legs rather than the legacy passengerWaypoints/legDurationsSeconds.
     const freshBooking = await this.bookingsRepository.findOne({
       where: { id: savedBooking.id },
-      relations: ['trip', 'trip.driver', 'trip.driver.vehicle', 'passenger'],
+      relations: [
+        'trip', 'trip.driver', 'trip.driver.vehicle', 'passenger',
+        'trip.currentRoutePlan', 'trip.currentRoutePlan.legs',
+      ],
     });
     return this.mapToResponseDto(freshBooking ?? savedBooking);
   }
@@ -176,7 +184,10 @@ export class BookingsService {
   async rejectBooking(bookingId: string, driverId: string): Promise<BookingResponseDto> {
     const booking = await this.bookingsRepository.findOne({
       where: { id: bookingId },
-      relations: ['trip', 'trip.driver', 'passenger'],
+      relations: [
+        'trip', 'trip.driver', 'trip.driver.vehicle', 'passenger',
+        'trip.currentRoutePlan', 'trip.currentRoutePlan.legs',
+      ],
     });
 
     if (!booking) throw new NotFoundException('Reserva no encontrada');
@@ -200,7 +211,10 @@ export class BookingsService {
   async cancelBooking(bookingId: string, passengerId: string): Promise<BookingResponseDto> {
     const booking = await this.bookingsRepository.findOne({
       where: { id: bookingId },
-      relations: ['trip', 'trip.driver', 'passenger'],
+      relations: [
+        'trip', 'trip.driver', 'passenger',
+        'trip.currentRoutePlan', 'trip.currentRoutePlan.legs',
+      ],
     });
 
     if (!booking) throw new NotFoundException('Reserva no encontrada');
@@ -256,7 +270,10 @@ export class BookingsService {
   async confirmBoarding(bookingId: string, passengerId: string): Promise<BookingResponseDto> {
     const booking = await this.bookingsRepository.findOne({
       where: { id: bookingId },
-      relations: ['trip', 'trip.driver', 'passenger'],
+      relations: [
+        'trip', 'trip.driver', 'passenger',
+        'trip.currentRoutePlan', 'trip.currentRoutePlan.legs',
+      ],
     });
 
     if (!booking) throw new NotFoundException('Reserva no encontrada');
@@ -274,7 +291,10 @@ export class BookingsService {
   async markNoShow(bookingId: string, driverId: string): Promise<BookingResponseDto> {
     const booking = await this.bookingsRepository.findOne({
       where: { id: bookingId },
-      relations: ['trip', 'trip.driver', 'passenger'],
+      relations: [
+        'trip', 'trip.driver', 'passenger',
+        'trip.currentRoutePlan', 'trip.currentRoutePlan.legs',
+      ],
     });
 
     if (!booking) throw new NotFoundException('Reserva no encontrada');
@@ -309,7 +329,10 @@ export class BookingsService {
     const safeLimit = Math.min(Math.max(1, limit), 50);
     const bookings = await this.bookingsRepository.find({
       where: { passenger: { id: passengerId } },
-      relations: ['trip', 'trip.driver', 'trip.driver.vehicle', 'passenger'],
+      relations: [
+        'trip', 'trip.driver', 'trip.driver.vehicle', 'passenger',
+        'trip.currentRoutePlan', 'trip.currentRoutePlan.legs',
+      ],
       order: { createdAt: 'DESC' },
       take: safeLimit,
       skip: (safePage - 1) * safeLimit,
@@ -317,16 +340,43 @@ export class BookingsService {
     return bookings.map(b => this.mapToResponseDto(b));
   }
 
+  /**
+   * Compute passengerEtaSeconds from the plan-based schema when available,
+   * with a legacy fallback for trips that pre-date Phase 2 or whose first
+   * recalc hasn't completed yet.
+   *
+   * Plan path: find the TripRouteLeg whose passengerDropOffId matches this
+   * booking's id, then sum durations for all legs up-to-and-including that
+   * one. Legs are sorted by legIndex so the sum is always in driving order.
+   *
+   * Legacy path: index into passengerWaypoints[] to find the stop position,
+   * then slice legDurationsSeconds[]. Falls back to originalDurationSeconds
+   * when no per-leg data exists (trip created before Phase 0).
+   */
   private mapToResponseDto(booking: Booking): BookingResponseDto {
-    const legDurs = booking.trip.legDurationsSeconds ?? [];
-    const totalSeconds = legDurs.length > 0
-      ? legDurs.reduce((a, b) => a + b, 0)
-      : booking.trip.originalDurationSeconds;
-    const waypoints = booking.trip.passengerWaypoints ?? [];
-    const stopIdx = waypoints.findIndex(w => w.passengerId === booking.passenger?.id);
-    const passengerEtaSeconds = stopIdx >= 0 && legDurs.length > 0
-      ? legDurs.slice(0, stopIdx + 1).reduce((a, b) => a + b, 0)
-      : totalSeconds;
+    const plan = booking.trip.currentRoutePlan;
+    let passengerEtaSeconds: number;
+
+    if (plan?.legs?.length) {
+      // Plan-based ETA — sort in place copy to avoid mutating the relation array
+      const sortedLegs = [...plan.legs].sort((a, b) => a.legIndex - b.legIndex);
+      const dropOffIdx = sortedLegs.findIndex(l => l.passengerDropOffId === booking.id);
+      passengerEtaSeconds = dropOffIdx >= 0
+        ? sortedLegs.slice(0, dropOffIdx + 1).reduce((s, l) => s + l.durationSeconds, 0)
+        // Passenger not yet wired into legs (recalc is in-flight) — use total
+        : plan.totalDurationSeconds;
+    } else {
+      // Legacy fallback for pre-Phase-2 trips
+      const legDurs = booking.trip.legDurationsSeconds ?? [];
+      const totalSeconds = legDurs.length > 0
+        ? legDurs.reduce((a, b) => a + b, 0)
+        : booking.trip.originalDurationSeconds;
+      const waypoints = booking.trip.passengerWaypoints ?? [];
+      const stopIdx = waypoints.findIndex(w => w.passengerId === booking.passenger?.id);
+      passengerEtaSeconds = stopIdx >= 0 && legDurs.length > 0
+        ? legDurs.slice(0, stopIdx + 1).reduce((a, b) => a + b, 0)
+        : totalSeconds;
+    }
 
     return {
       id: booking.id,
