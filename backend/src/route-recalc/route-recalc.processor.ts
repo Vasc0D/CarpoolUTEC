@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { Job } from 'bullmq';
 import { Booking, BookingStatus } from '../bookings/entities/booking.entity';
+import { BookingStateMachine } from '../bookings/booking-state-machine';
 import { Trip } from '../trips/entities/trip.entity';
 import { TripRoutePlan, RoutePlanStatus, RoutingPreference } from '../trips/entities/trip-route-plan.entity';
 import { TripRouteLeg } from '../trips/entities/trip-route-leg.entity';
@@ -351,7 +352,9 @@ export class RouteRecalcProcessor extends WorkerHost {
           relations: ['trip', 'trip.driver', 'passenger'],
         });
         if (!booking) return;
-        if (booking.status !== BookingStatus.ACCEPTED) return;
+        // Abort compensation if the booking is already in a terminal state or
+        // otherwise can't be canceled — prevents double-compensation races.
+        if (!BookingStateMachine.canTransition(booking.status, BookingStatus.CANCELED)) return;
 
         await manager.update(Booking, booking.id, { status: BookingStatus.CANCELED });
         await manager

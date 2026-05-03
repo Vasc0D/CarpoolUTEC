@@ -5,6 +5,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, DataSource, EntityManager, In, LessThan, Repository } from 'typeorm';
 import { Trip, TripStatus } from './entities/trip.entity';
+import { TripStateMachine } from './trip-state-machine';
 import { TripRoutePlan, RoutePlanStatus, RoutingPreference } from './entities/trip-route-plan.entity';
 import { TripRouteLeg } from './entities/trip-route-leg.entity';
 import { CreateTripDto } from './dto/create-trip.dto';
@@ -371,7 +372,7 @@ export class TripsService {
 
     if (!trip) throw new NotFoundException('Viaje no encontrado');
     if (trip.driver.id !== driverId) throw new ForbiddenException('Solo el conductor puede iniciar el viaje');
-    if (trip.status !== TripStatus.SCHEDULED) throw new BadRequestException('El viaje no está en estado SCHEDULED');
+    TripStateMachine.assertTransition(trip.status, TripStatus.ACTIVE);
 
     const minutesLate = (new Date().getTime() - new Date(trip.departureTime).getTime()) / 60000;
     if (minutesLate < 0) throw new BadRequestException('Aún no es la hora de salida');
@@ -401,7 +402,7 @@ export class TripsService {
 
     if (!trip) throw new NotFoundException('Viaje no encontrado');
     if (trip.driver.id !== driverId) throw new ForbiddenException('Solo el conductor puede finalizar el viaje');
-    if (trip.status !== TripStatus.ACTIVE) throw new BadRequestException('El viaje no está en curso');
+    TripStateMachine.assertTransition(trip.status, TripStatus.COMPLETED);
 
     trip.status = TripStatus.COMPLETED;
     const saved = await this.tripsRepository.save(trip);
@@ -667,6 +668,9 @@ export class TripsService {
 
     if (!trip) throw new NotFoundException('Trip no encontrado');
     if (trip.driver.id !== driverId) throw new ForbiddenException('Solo el dueño puede cancelar el viaje');
+    // Validates SCHEDULED→CANCELED or ACTIVE→CANCELED (if we ever allow mid-trip cancellation).
+    // Business rule on top of the state graph: only before departure.
+    TripStateMachine.assertTransition(trip.status, TripStatus.CANCELED);
     if (new Date() >= new Date(trip.departureTime))
       throw new BadRequestException('No puedes cancelar el viaje una vez que ha llegado la hora de salida');
 

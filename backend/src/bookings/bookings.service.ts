@@ -5,6 +5,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { Booking, BookingStatus } from './entities/booking.entity';
+import { BookingStateMachine } from './booking-state-machine';
 import { Trip, TripStatus } from '../trips/entities/trip.entity';
 import { UsersService } from '../users/users.service';
 import { BookingResponseDto } from './dto/booking-response.dto';
@@ -122,7 +123,7 @@ export class BookingsService {
 
     if (!booking) throw new NotFoundException('Reserva no encontrada');
     if (booking.trip.driver.id !== driverId) throw new ForbiddenException('Solo el conductor puede aceptar reservas');
-    if (booking.status !== BookingStatus.PENDING) throw new BadRequestException('La reserva no está pendiente');
+    BookingStateMachine.assertTransition(booking.status, BookingStatus.ACCEPTED);
 
     // Phase 1: atomic seat decrement + status flip in one DB transaction.
     const savedBooking = await this.dataSource.transaction(async (manager: EntityManager) => {
@@ -192,10 +193,7 @@ export class BookingsService {
 
     if (!booking) throw new NotFoundException('Reserva no encontrada');
     if (booking.trip.driver.id !== driverId) throw new ForbiddenException('Solo el conductor puede rechazar');
-    // M-1: explicit guard instead of silent fall-through
-    if (booking.status !== BookingStatus.PENDING) {
-      throw new BadRequestException('Solo puedes rechazar reservas pendientes');
-    }
+    BookingStateMachine.assertTransition(booking.status, BookingStatus.REJECTED);
 
     booking.status = BookingStatus.REJECTED;
     const savedBooking = await this.bookingsRepository.save(booking);
@@ -220,11 +218,7 @@ export class BookingsService {
     if (!booking) throw new NotFoundException('Reserva no encontrada');
     if (booking.passenger.id !== passengerId)
       throw new ForbiddenException('No puedes cancelar una reserva que no es tuya');
-
-    // H-2: guard COMPLETED status — history must not be mutable
-    const nonCancelable = [BookingStatus.CANCELED, BookingStatus.REJECTED, BookingStatus.COMPLETED];
-    if (nonCancelable.includes(booking.status))
-      throw new BadRequestException('No puedes cancelar esta reserva');
+    BookingStateMachine.assertTransition(booking.status, BookingStatus.CANCELED);
 
     const wasAccepted = booking.status === BookingStatus.ACCEPTED;
     booking.status = BookingStatus.CANCELED;
@@ -305,8 +299,8 @@ export class BookingsService {
     if (!booking) throw new NotFoundException('Reserva no encontrada');
     if (booking.trip.driver.id !== driverId)
       throw new ForbiddenException('Solo el conductor puede marcar ausentes');
-    if (booking.status !== BookingStatus.ACCEPTED)
-      throw new BadRequestException('Solo se pueden marcar como ausentes reservas aceptadas');
+    // ACCEPTED → CANCELED is the only valid transition from markNoShow.
+    BookingStateMachine.assertTransition(booking.status, BookingStatus.CANCELED);
 
     // H-4: no-show only valid at or after departure time
     if (new Date() < new Date(booking.trip.departureTime)) {
