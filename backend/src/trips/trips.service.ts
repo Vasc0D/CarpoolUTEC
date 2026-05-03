@@ -435,7 +435,7 @@ export class TripsService {
     const safeLimit = Math.min(Math.max(1, limit), 50);
     return this.tripsRepository.find({
       where: { driver: { id: driverId } },
-      relations: ['bookings', 'bookings.passenger'],
+      relations: ['bookings', 'bookings.passenger', 'currentRoutePlan', 'currentRoutePlan.legs'],
       order: { departureTime: 'DESC' },
       take: safeLimit,
       skip: (safePage - 1) * safeLimit,
