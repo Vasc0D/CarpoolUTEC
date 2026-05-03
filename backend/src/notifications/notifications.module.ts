@@ -6,11 +6,13 @@ import { NotificationsService } from './notifications.service';
 import { NotificationsGateway } from './notifications.gateway';
 import { Booking } from '../bookings/entities/booking.entity';
 import { Trip } from '../trips/entities/trip.entity';
+import { TripRoutePlan } from '../trips/entities/trip-route-plan.entity';
 
 @Module({
   imports: [
-    // Trip needed for driver_location authz check in the gateway
-    TypeOrmModule.forFeature([Booking, Trip]),
+    // Trip + Booking: driver_location auth + ETA booking lookups
+    // TripRoutePlan: active plan load for ETA computation on each GPS ping
+    TypeOrmModule.forFeature([Booking, Trip, TripRoutePlan]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -21,6 +23,6 @@ import { Trip } from '../trips/entities/trip.entity';
     }),
   ],
   providers: [NotificationsGateway, NotificationsService],
-  exports: [NotificationsService],
+  exports: [NotificationsService, NotificationsGateway],
 })
 export class NotificationsModule { }

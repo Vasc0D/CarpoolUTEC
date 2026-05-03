@@ -68,3 +68,30 @@ export interface BookingRouteFailedPayload {
   tripId: string;
   reason: string;
 }
+
+/**
+ * Emitted to each participant of an active trip on every driver GPS ping.
+ *
+ * etaSeconds is personalized:
+ *   - For a passenger it is seconds remaining until their own drop-off stop.
+ *   - For the driver it is seconds remaining to the final destination.
+ *   - null when the trip has no active route plan yet (Routes API still
+ *     computing the first recalc).
+ *
+ * heading is degrees clockwise from true north, null if unavailable.
+ */
+export interface DriverLocationUpdatePayload {
+  tripId: string;
+  lat: number;
+  lng: number;
+  heading: number | null;
+  etaSeconds: number | null;
+}
+
+/** Stored in Redis under `driver_location:{tripId}` (TTL 30 s). */
+export interface StoredDriverLocation {
+  lat: number;
+  lng: number;
+  heading: number | null;
+  ts: number; // Date.now()
+}

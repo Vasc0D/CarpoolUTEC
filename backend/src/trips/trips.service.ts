@@ -355,10 +355,15 @@ export class TripsService {
     return results;
   }
 
+  /**
+   * Returns the trip with its active route plan and legs attached.
+   * Consumers (ActiveTripScreen) use plan.encodedPolyline for the map and
+   * plan.legs for static ETA computation; live ETAs arrive via socket.
+   */
   async findOne(tripId: string): Promise<Trip> {
     const trip = await this.tripsRepository.findOne({
       where: { id: tripId },
-      relations: ['driver'],
+      relations: ['driver', 'currentRoutePlan', 'currentRoutePlan.legs'],
     });
     if (!trip) throw new NotFoundException('Viaje no encontrado');
     return trip;

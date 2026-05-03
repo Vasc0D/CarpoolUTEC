@@ -14,6 +14,8 @@ import { GeoModule } from '../geo/geo.module';
   imports: [
     TypeOrmModule.forFeature([Trip, TripRoutePlan, TripRouteLeg, Booking]),
     UsersModule,
+    // NotificationsModule is imported so TripsController can inject
+    // NotificationsGateway for the driver-location Redis lookup endpoint.
     NotificationsModule,
     GeoModule,
   ],
