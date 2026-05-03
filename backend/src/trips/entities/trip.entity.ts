@@ -21,34 +21,11 @@ export class Trip {
   @ManyToOne(() => User, user => user.trips)
   driver: User;
 
-  @Column({
-    type: 'geometry',
-    spatialFeatureType: 'LineString',
-    srid: 4326,
-  })
-  // C-2: explicit type instead of any
-  routePolyline: { type: string; coordinates: number[][] };
-
   @Column({ type: 'int', default: 5 })
   maxDetourMinutes: number;
 
   @Column({ default: false })
   detourEnabled: boolean;
-
-  @Column({ type: 'int', default: 0 })
-  originalDurationSeconds: number;
-
-  @Column({ type: 'json', nullable: true })
-  tripOrigin: { lat: number; lng: number } | null;
-
-  @Column({ type: 'json', nullable: true })
-  finalDestination: { lat: number; lng: number } | null;
-
-  @Column({ type: 'json', nullable: true })
-  passengerWaypoints: { passengerId: string; lat: number; lng: number }[] | null;
-
-  @Column({ type: 'json', nullable: true })
-  legDurationsSeconds: number[] | null;
 
   // B-1: index for cron jobs and availability queries that filter by departureTime
   @Index()
@@ -74,17 +51,16 @@ export class Trip {
   pricePerSeat: number;
 
   // meetingPoint removed in migration 1745700000000 — pickup is now the fixed
-  // PICKUP_POINT constant (see src/trips/constants.ts). If multi-campus support
-  // is added later, replace the constant with a `pickupPointId` FK.
+  // PICKUP_POINT constant (see src/trips/constants.ts).
 
   @OneToMany(() => Booking, booking => booking.trip)
   bookings: Booking[];
 
-  // Phase 2: pointer to the latest ACTIVE TripRoutePlan. Reads still hit the
-  // legacy columns above (routePolyline, passengerWaypoints, etc.) until the
-  // dual-write commit lands; this FK is populated alongside those writes
-  // and consumers will switch over in a later commit. Nullable until every
-  // existing trip has been backfilled.
+  // Pointer to the latest ACTIVE TripRoutePlan. Updated atomically by
+  // RouteRecalcProcessor whenever a new recalc succeeds (old plan is
+  // SUPERSEDED, new plan is inserted, this FK is swapped — all in one
+  // transaction). NULL only for trips whose initial Routes API call failed;
+  // those trips won't appear in proximity search results.
   @ManyToOne(() => TripRoutePlan, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'currentRoutePlanId' })
   currentRoutePlan: TripRoutePlan | null;
@@ -97,7 +73,7 @@ export class Trip {
   @OneToMany(() => TripRoutePlan, plan => plan.trip)
   routePlans: TripRoutePlan[];
 
-  // B-3: audit timestamps — absent from original entity
+  // B-3: audit timestamps
   @CreateDateColumn()
   createdAt: Date;
 

@@ -18,10 +18,13 @@ import { ROUTE_RECALC_QUEUE, RouteRecalcJobData } from './route-recalc.types';
  * Decoupling the API shape from the DB shape so the processor's main
  * branches stay readable and the dual-write transaction has a single,
  * well-typed input.
+ *
+ * Each intermediate now carries its bookingId so persistAtomicSwap can set
+ * passengerDropOffId on the leg directly, without a second DB query.
  */
 type RecalcResult = {
   trip: Trip;
-  intermediates: { passengerId: string; lat: number; lng: number }[];
+  intermediates: { passengerId: string; bookingId: string; lat: number; lng: number }[];
   origin: { lat: number; lng: number };
   finalDest: { lat: number; lng: number };
   polylinePoints: [number, number][];
@@ -82,23 +85,58 @@ export class RouteRecalcProcessor extends WorkerHost {
     }
   }
 
+  /**
+   * Loads the trip's active plan legs for origin/dest, then builds the
+   * intermediate list from ACCEPTED bookings — the ground truth for which
+   * passengers currently need a stop. Reading from bookings (not plan legs)
+   * captures any bookings that were accepted between recalc cycles.
+   *
+   * The requesting passenger is excluded from the existing list (dedup guard)
+   * and appended at the end; Routes API optimizes the order.
+   */
   private async computeAdd(data: Extract<RouteRecalcJobData, { op: 'add' }>): Promise<RecalcResult | null> {
-    const trip = await this.tripsRepository.findOne({ where: { id: data.tripId } });
+    const [trip, acceptedBookings] = await Promise.all([
+      this.tripsRepository.findOne({
+        where: { id: data.tripId },
+        relations: ['currentRoutePlan', 'currentRoutePlan.legs'],
+      }),
+      this.bookingsRepository.find({
+        where: { trip: { id: data.tripId }, status: BookingStatus.ACCEPTED },
+        relations: ['passenger'],
+      }),
+    ]);
     if (!trip) throw new Error(`Trip ${data.tripId} not found`);
 
-    const coords: number[][] = trip.routePolyline?.coordinates;
-    if (!coords?.length || coords.length < 2) {
-      throw new Error(`Trip ${data.tripId} has no usable routePolyline`);
+    const plan = trip.currentRoutePlan;
+    if (!plan?.legs?.length) {
+      throw new Error(`Trip ${data.tripId} has no active route plan`);
     }
 
-    const origin = trip.tripOrigin ?? { lat: coords[0][1], lng: coords[0][0] };
-    const finalDest = trip.finalDestination ?? { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
+    const sortedLegs = [...plan.legs].sort((a, b) => a.legIndex - b.legIndex);
+    const origin = {
+      lat: Number(sortedLegs[0].startLat),
+      lng: Number(sortedLegs[0].startLng),
+    };
+    const finalDest = {
+      lat: Number(sortedLegs[sortedLegs.length - 1].endLat),
+      lng: Number(sortedLegs[sortedLegs.length - 1].endLng),
+    };
 
-    // Filter prevents duplicate-waypoint corruption when a previous recalc
-    // already persisted this passenger's stop.
+    // Exclude this booking from the existing list (dedup guard) then append
+    // the new passenger's destination. bookingId-based filter is more precise
+    // than passengerId because it can't accidentally drop a different passenger
+    // who happens to share the same userId (impossible by schema, but defensive).
+    const existingIntermediates = acceptedBookings
+      .filter(b => b.id !== data.bookingId && b.destLat != null && b.destLng != null)
+      .map(b => ({
+        passengerId: b.passenger.id,
+        bookingId: b.id,
+        lat: Number(b.destLat),
+        lng: Number(b.destLng),
+      }));
     const intermediatesPre = [
-      ...(trip.passengerWaypoints ?? []).filter(w => w.passengerId !== data.passengerId),
-      { passengerId: data.passengerId, lat: data.destLat, lng: data.destLng },
+      ...existingIntermediates,
+      { passengerId: data.passengerId, bookingId: data.bookingId, lat: data.destLat, lng: data.destLng },
     ];
     const allWaypoints = [origin, ...intermediatesPre.map(w => ({ lat: w.lat, lng: w.lng })), finalDest];
 
@@ -107,8 +145,6 @@ export class RouteRecalcProcessor extends WorkerHost {
       new Date(trip.departureTime),
     );
 
-    // Apply Google's optimized order so the persisted waypoint sequence
-    // matches the actual driving sequence.
     const intermediates = waypointOrder.length === intermediatesPre.length
       ? waypointOrder.map(i => intermediatesPre[i])
       : intermediatesPre;
@@ -116,21 +152,50 @@ export class RouteRecalcProcessor extends WorkerHost {
     return { trip, intermediates, origin, finalDest, polylinePoints, legDurations };
   }
 
+  /**
+   * Same strategy as computeAdd but for the remove case. By the time this
+   * runs, the canceled booking is already CANCELED so it won't appear in
+   * acceptedBookings — the filter is just a defensive safety net.
+   */
   private async computeRemove(data: Extract<RouteRecalcJobData, { op: 'remove' }>): Promise<RecalcResult | null> {
-    const trip = await this.tripsRepository.findOne({ where: { id: data.tripId } });
+    const [trip, acceptedBookings] = await Promise.all([
+      this.tripsRepository.findOne({
+        where: { id: data.tripId },
+        relations: ['currentRoutePlan', 'currentRoutePlan.legs'],
+      }),
+      this.bookingsRepository.find({
+        where: { trip: { id: data.tripId }, status: BookingStatus.ACCEPTED },
+        relations: ['passenger'],
+      }),
+    ]);
     if (!trip) throw new Error(`Trip ${data.tripId} not found`);
 
-    const remaining = (trip.passengerWaypoints ?? []).filter(w => w.passengerId !== data.passengerId);
-    const coords: number[][] = trip.routePolyline?.coordinates;
-    if (!coords?.length || coords.length < 2) {
-      this.logger.warn(`Trip ${trip.id} has no usable routePolyline; skipping remove`);
+    const plan = trip.currentRoutePlan;
+    if (!plan?.legs?.length) {
+      this.logger.warn(`Trip ${trip.id} has no active route plan; skipping remove`);
       return null;
     }
 
-    const origin = trip.tripOrigin ?? { lat: coords[0][1], lng: coords[0][0] };
-    const finalDest = trip.finalDestination ?? { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
-    const waypointList = [origin, ...remaining.map(w => ({ lat: w.lat, lng: w.lng })), finalDest];
+    const sortedLegs = [...plan.legs].sort((a, b) => a.legIndex - b.legIndex);
+    const origin = {
+      lat: Number(sortedLegs[0].startLat),
+      lng: Number(sortedLegs[0].startLng),
+    };
+    const finalDest = {
+      lat: Number(sortedLegs[sortedLegs.length - 1].endLat),
+      lng: Number(sortedLegs[sortedLegs.length - 1].endLng),
+    };
 
+    const remaining = acceptedBookings
+      .filter(b => b.id !== data.bookingId && b.destLat != null && b.destLng != null)
+      .map(b => ({
+        passengerId: b.passenger.id,
+        bookingId: b.id,
+        lat: Number(b.destLat),
+        lng: Number(b.destLng),
+      }));
+
+    const waypointList = [origin, ...remaining.map(w => ({ lat: w.lat, lng: w.lng })), finalDest];
     const { polylinePoints, legDurations, waypointOrder } = await this.directionsService.getRoute(
       waypointList,
       new Date(trip.departureTime),
@@ -152,18 +217,23 @@ export class RouteRecalcProcessor extends WorkerHost {
    * doesn't collide on insert. Within a transaction, this is just defensive
    * — Postgres only checks the constraint at commit by default.
    */
+  /**
+   * Atomic swap to the new TripRoutePlan.
+   *
+   * Each intermediate already carries its bookingId (set in computeAdd /
+   * computeRemove from the accepted-bookings query), so there is no second
+   * booking lookup here. Legacy column writes (routePolyline, passengerWaypoints,
+   * legDurationsSeconds) were removed in Phase 2 Commit #5 — those columns
+   * were dropped by migration 1745900000000.
+   */
   private async persistAtomicSwap(r: RecalcResult): Promise<void> {
     const { trip, intermediates, origin, finalDest, polylinePoints, legDurations } = r;
-
-    // Resolve passengerId → bookingId for each waypoint up front (single
-    // query) so the transaction body stays short.
-    const bookingMap = await this.resolveBookingMap(trip.id, intermediates.map(w => w.passengerId));
 
     const lineString = this.geoService.createLineString(polylinePoints);
     const encodedPolyline = this.encodePolyline(polylinePoints);
 
     await this.dataSource.transaction(async (manager: EntityManager) => {
-      // 1. Find current ACTIVE version (if any) and supersede it.
+      // 1. Supersede the current ACTIVE plan (if any).
       const previous = await manager.findOne(TripRoutePlan, {
         where: { tripId: trip.id, status: RoutePlanStatus.ACTIVE },
       });
@@ -185,14 +255,14 @@ export class RouteRecalcProcessor extends WorkerHost {
         status: RoutePlanStatus.ACTIVE,
       }));
 
-      // 3. Build legs: one per intermediate (each ends at a passenger drop-off)
-      // plus a final leg ending at the trip's destination (no drop-off).
+      // 3. Build legs: one per intermediate (drop-off) plus a final leg to the
+      // trip destination. bookingId comes directly from the intermediate so no
+      // extra query is needed.
       const legRows: Partial<TripRouteLeg>[] = [];
       const sequence = [origin, ...intermediates.map(w => ({ lat: w.lat, lng: w.lng })), finalDest];
       for (let i = 0; i < legDurations.length; i++) {
         const start = sequence[i];
         const end = sequence[i + 1];
-        const passengerForLeg = i < intermediates.length ? intermediates[i].passengerId : null;
         legRows.push({
           planId: inserted.id,
           legIndex: i,
@@ -201,42 +271,16 @@ export class RouteRecalcProcessor extends WorkerHost {
           startLng: start.lng,
           endLat: end.lat,
           endLng: end.lng,
-          passengerDropOffId: passengerForLeg ? bookingMap.get(passengerForLeg) ?? null : null,
+          passengerDropOffId: i < intermediates.length ? intermediates[i].bookingId : null,
         });
       }
       if (legRows.length > 0) {
         await manager.insert(TripRouteLeg, legRows);
       }
 
-      // 4. Point the trip at the new plan AND keep legacy columns in sync.
-      // The legacy writes go away in the next commit once readers are
-      // migrated, but for now we cannot break consumers reading
-      // routePolyline / passengerWaypoints / legDurationsSeconds.
-      await manager.update(Trip, trip.id, {
-        currentRoutePlanId: inserted.id,
-        routePolyline: lineString,
-        passengerWaypoints: intermediates,
-        legDurationsSeconds: legDurations,
-      });
+      // 4. Point the trip at the new plan.
+      await manager.update(Trip, trip.id, { currentRoutePlanId: inserted.id });
     });
-  }
-
-  /**
-   * One DB query → Map<passengerId, bookingId> for every passenger that has
-   * an ACCEPTED booking on this trip. Used to associate each leg with the
-   * booking it terminates at.
-   */
-  private async resolveBookingMap(tripId: string, passengerIds: string[]): Promise<Map<string, string>> {
-    const map = new Map<string, string>();
-    if (passengerIds.length === 0) return map;
-    const bookings = await this.bookingsRepository.find({
-      where: { trip: { id: tripId }, status: BookingStatus.ACCEPTED },
-      relations: ['passenger'],
-    });
-    for (const b of bookings) {
-      if (passengerIds.includes(b.passenger.id)) map.set(b.passenger.id, b.id);
-    }
-    return map;
   }
 
   /**

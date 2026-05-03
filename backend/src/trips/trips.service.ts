@@ -90,26 +90,20 @@ export class TripsService {
 
     const lineString = this.geoService.createLineString(finalRoute);
 
-    // Phase 2 dual-write: persist the trip AND its initial v=1 TripRoutePlan
-    // in one transaction so currentRoutePlanId is never null on a fresh trip.
-    // Legacy columns (routePolyline, originalDurationSeconds,
-    // legDurationsSeconds, tripOrigin, finalDestination) stay populated for
-    // the dual-write window — readers switch over in a later commit.
+    // Persist the trip AND its initial v=1 TripRoutePlan in one transaction
+    // so currentRoutePlanId is never null on a fresh trip. Legacy routing
+    // columns (routePolyline, passengerWaypoints, etc.) were dropped in
+    // migration 1745900000000; all route data lives in TripRoutePlan/Leg.
     const saved = await this.dataSource.transaction(async (manager: EntityManager) => {
       const trip = manager.create(Trip, {
         driver: user,
-        routePolyline: lineString,
         departureTime: new Date(createTripDto.departureTime),
         autoAccept: createTripDto.autoAccept || false,
         availableSeats: createTripDto.availableSeats ?? user.vehicle.capacity,
         maxDetourMinutes: createTripDto.maxDetourMinutes ?? 5,
         pricePerSeat: createTripDto.pricePerSeat ?? 0,
         detourEnabled: createTripDto.detourEnabled ?? false,
-        originalDurationSeconds,
-        legDurationsSeconds,
         status: TripStatus.SCHEDULED,
-        tripOrigin: { lat: origin.lat, lng: origin.lng },
-        finalDestination: { lat: destination.lat, lng: destination.lng },
       });
       const tripRow = await manager.save(Trip, trip);
 
@@ -189,45 +183,81 @@ export class TripsService {
     destLng?: number,
     passengerId?: string,
   ): Promise<TripSearchResult[]> {
-    // B-5: getDWithinCondition now returns [condition, params] — spread with ...
-    // 'pickup' key → pickupLat / pickupLng / pickupRadius params
+    // Join the active route plan so spatial filters can use plan."polylineGeom"
+    // instead of the now-dropped trip."routePolyline" column.
+    // Trips without a plan (Routes API failed on creation) are excluded from
+    // results — they have no route data and cannot be matched spatially.
     const buildBase = () =>
       this.tripsRepository.createQueryBuilder('trip')
         .leftJoin('trip.driver', 'driver')
         .leftJoin('driver.vehicle', 'vehicle')
         .addSelect(['driver.id', 'driver.name', 'vehicle.model', 'vehicle.color', 'vehicle.brand', 'vehicle.plate'])
+        .leftJoin('trip.currentRoutePlan', 'plan')
         .where('trip.status = :status', { status: TripStatus.SCHEDULED })
         .andWhere('trip.availableSeats > 0')
         .andWhere('trip.departureTime > :now', { now: new Date() })
-        .andWhere(...this.geoService.getDWithinCondition('trip."routePolyline"', lat, lng, 500, 'pickup'));
+        .andWhere(...this.geoService.getDWithinCondition('plan."polylineGeom"', lat, lng, 500, 'pickup'));
 
     if (destLat === undefined || destLng === undefined) {
       return buildBase().getMany() as Promise<TripSearchResult[]>;
     }
 
-    // Non-detour trips: distance-based matching
-    // 'dropoff' key → dropoffLat / dropoffLng / dropoffRadius (no collision with 'pickup')
+    // Non-detour trips: distance-based matching against the plan geometry
     const nonDetourQb = buildBase()
       .andWhere('trip.detourEnabled = :detour', { detour: false })
-      // C-1 / C-Phase2: named params for ST_Distance select
       .addSelect(
-        `ST_Distance(trip."routePolyline"::geography, ST_SetSRID(ST_MakePoint(:destLng, :destLat), 4326)::geography)`,
+        `ST_Distance(plan."polylineGeom"::geography, ST_SetSRID(ST_MakePoint(:destLng, :destLat), 4326)::geography)`,
         'distanceToDestination',
       )
       .setParameter('destLng', destLng)
       .setParameter('destLat', destLat)
-      .andWhere(...this.geoService.getDWithinCondition('trip."routePolyline"', destLat, destLng, 800, 'dropoff'));
+      .andWhere(...this.geoService.getDWithinCondition('plan."polylineGeom"', destLat, destLng, 800, 'dropoff'));
 
-    // Detour-enabled trips: origin filter only, dest filtered via Directions API
-    // M-5: cap at 10 to avoid too many Directions API calls
-    const detourQb = buildBase()
+    // Detour-enabled trips: proximity filter only; detour minutes are checked
+    // via Directions API below. We get IDs first so we can reload with plan
+    // + legs (needed to derive origin/dest/existing-stops from the leg rows).
+    // M-5: cap at 10 to bound Routes API calls.
+    const detourIdRows = await buildBase()
       .andWhere('trip.detourEnabled = :detour', { detour: true })
-      .take(10);
+      .select('trip.id')
+      .take(10)
+      .getMany();
+    const detourTripIds = detourIdRows.map(t => t.id);
 
-    const [{ entities: nonDetourEntities, raw: nonDetourRaw }, detourTrips] = await Promise.all([
+    // Run the three async operations in parallel: non-detour query, detour
+    // trip full-load (with plan + legs), and the requesting passenger's active
+    // booking IDs on those trips (for the duplicate-waypoint dedup guard).
+    const [
+      { entities: nonDetourEntities, raw: nonDetourRaw },
+      detourTrips,
+      passengerBookingsList,
+    ] = await Promise.all([
       nonDetourQb.getRawAndEntities(),
-      detourQb.getMany(),
+      detourTripIds.length > 0
+        ? this.tripsRepository.find({
+            where: { id: In(detourTripIds) },
+            relations: ['currentRoutePlan', 'currentRoutePlan.legs'],
+          })
+        : Promise.resolve([] as Trip[]),
+      passengerId && detourTripIds.length > 0
+        ? this.bookingsRepository.find({
+            where: {
+              passenger: { id: passengerId },
+              status: In([BookingStatus.PENDING, BookingStatus.ACCEPTED]),
+            },
+            relations: ['trip'],
+          })
+        : Promise.resolve([] as Booking[]),
     ]);
+
+    // Map tripId → passengerBookingId for the requesting passenger so the
+    // detour preview can exclude their existing stop from the re-routing call
+    // (otherwise a re-search after booking feeds Routes API a duplicate waypoint).
+    const passengerBookingByTripId = new Map<string, string>(
+      passengerBookingsList
+        .filter(b => detourTripIds.includes(b.trip.id))
+        .map(b => [b.trip.id, b.id]),
+    );
 
     const nonDetourResults: TripSearchResult[] = nonDetourEntities.map((entity, i) => {
       const dist = parseFloat(nonDetourRaw[i].distanceToDestination ?? '9999');
@@ -242,26 +272,29 @@ export class TripsService {
       await Promise.all(
         detourTrips.map(async (trip): Promise<TripSearchResult | null> => {
           try {
-            const coords: number[][] = trip.routePolyline?.coordinates;
-            if (!coords?.length || coords.length < 2) return null;
+            const plan = trip.currentRoutePlan;
+            if (!plan?.legs?.length) return null;
 
-            // Use pinned coordinates to prevent drift; fall back to polyline for legacy trips
-            const origin = trip.tripOrigin
-              ?? { lat: coords[0][1], lng: coords[0][0] };
-            const finalDest = trip.finalDestination
-              ?? { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
-            // Exclude the requesting passenger's own waypoint if they already have an active
-            // booking on this trip — without this, a passenger searching again after booking
-            // would feed Routes API a duplicated waypoint (their existing stored stop +
-            // their search destination), which previously surfaced as the "two identical
-            // intermediates with optimizeWaypointOrder:true" calls in production logs.
-            const existingWaypoints = (trip.passengerWaypoints ?? [])
-              .filter(w => !passengerId || w.passengerId !== passengerId)
-              .map(w => ({ lat: w.lat, lng: w.lng }));
+            const sortedLegs = [...plan.legs].sort((a, b) => a.legIndex - b.legIndex);
+            const origin = {
+              lat: Number(sortedLegs[0].startLat),
+              lng: Number(sortedLegs[0].startLng),
+            };
+            const finalDest = {
+              lat: Number(sortedLegs[sortedLegs.length - 1].endLat),
+              lng: Number(sortedLegs[sortedLegs.length - 1].endLng),
+            };
+
+            // Existing passenger drop-off points from the plan, excluding the
+            // requesting passenger's own stop to avoid a duplicate-waypoint call.
+            const passengerBookingId = passengerBookingByTripId.get(trip.id);
+            const existingWaypoints = sortedLegs
+              .filter(l => l.passengerDropOffId !== null && l.passengerDropOffId !== passengerBookingId)
+              .map(l => ({ lat: Number(l.endLat), lng: Number(l.endLng) }));
+
             const allWaypoints = [origin, ...existingWaypoints, { lat: destLat, lng: destLng }, finalDest];
-
             const { durationSeconds } = await this.directionsService.getRoute(allWaypoints, new Date(trip.departureTime));
-            const detourSeconds = durationSeconds - trip.originalDurationSeconds;
+            const detourSeconds = durationSeconds - plan.totalDurationSeconds;
             const detourMinutes = Math.round(detourSeconds / 60);
 
             if (detourMinutes <= trip.maxDetourMinutes) {
@@ -301,13 +334,15 @@ export class TripsService {
       const batchResults = await Promise.all(
         batch.map(async stop => {
           // M-2: EXISTS-style query — limit(1) + getRawOne avoids a full COUNT scan
-          // B-5: 'stop' key → stopLat / stopLng / stopRadius
+          // Join the active plan so we can filter by plan."polylineGeom"
+          // (trip."routePolyline" was dropped in migration 1745900000000).
           const row = await this.tripsRepository.createQueryBuilder('trip')
             .select('1')
+            .leftJoin('trip.currentRoutePlan', 'plan')
             .where('trip.status = :status', { status: TripStatus.SCHEDULED })
             .andWhere('trip.availableSeats > 0')
             .andWhere('trip.departureTime > :now', { now: new Date() })
-            .andWhere(...this.geoService.getDWithinCondition('trip."routePolyline"', stop.lat, stop.lng, 600, 'stop'))
+            .andWhere(...this.geoService.getDWithinCondition('plan."polylineGeom"', stop.lat, stop.lng, 600, 'stop'))
             .limit(1)
             .getRawOne();
           return { id: stop.id, covered: !!row };
@@ -493,35 +528,49 @@ export class TripsService {
     destLng: number,
     passengerId?: string,
   ): Promise<{ latitude: number; longitude: number; routeToDropoff: { latitude: number; longitude: number }[]; isDetour: boolean }> {
-    const trip = await this.tripsRepository.findOne({ where: { id: tripId } });
+    // Load plan + legs upfront so previewRouteWithDetour (detour path) can
+    // derive origin/dest/existing-stops without another DB round-trip.
+    const trip = await this.tripsRepository.findOne({
+      where: { id: tripId },
+      relations: ['currentRoutePlan', 'currentRoutePlan.legs'],
+    });
     if (!trip) throw new NotFoundException('Viaje no encontrado');
 
     if (trip.detourEnabled) {
       return this.previewRouteWithDetour(trip, destLat, destLng, passengerId);
     }
 
+    // Non-detour: use the plan's polylineGeom for PostGIS calculations.
+    // trip."routePolyline" was dropped in migration 1745900000000.
+    if (!trip.currentRoutePlanId) throw new NotFoundException('No se pudo calcular el punto');
+
     const result = await this.tripsRepository.query(
-      `SELECT
+      `WITH geom AS (
+          SELECT "polylineGeom" AS line
+          FROM trip_route_plans
+          WHERE id = $1
+        )
+        SELECT
           ST_AsGeoJSON(
             ST_ClosestPoint(
-              (SELECT "routePolyline" FROM trips WHERE id = $1)::geometry,
+              (SELECT line FROM geom)::geometry,
               ST_SetSRID(ST_MakePoint($3, $2), 4326)::geometry
             )
           ) AS closest_point,
           ST_AsGeoJSON(
             ST_LineSubstring(
-              (SELECT "routePolyline" FROM trips WHERE id = $1)::geometry,
+              (SELECT line FROM geom)::geometry,
               0,
               ST_LineLocatePoint(
-                (SELECT "routePolyline" FROM trips WHERE id = $1)::geometry,
+                (SELECT line FROM geom)::geometry,
                 ST_ClosestPoint(
-                  (SELECT "routePolyline" FROM trips WHERE id = $1)::geometry,
+                  (SELECT line FROM geom)::geometry,
                   ST_SetSRID(ST_MakePoint($3, $2), 4326)::geometry
                 )
               )
             )
           ) AS route_to_dropoff`,
-      [tripId, destLat, destLng],
+      [trip.currentRoutePlanId, destLat, destLng],
     );
     if (!result?.[0]?.closest_point) throw new NotFoundException('No se pudo calcular el punto');
     const dropoff = JSON.parse(result[0].closest_point);
@@ -537,29 +586,56 @@ export class TripsService {
     };
   }
 
+  /**
+   * Computes a route-preview for a detour booking request.
+   *
+   * Origin / finalDest / existing stops are all derived from the trip's
+   * current active TripRoutePlan legs (plan must already be loaded on `trip`
+   * via the caller's `findOne` with relations). The requesting passenger's
+   * existing stop is excluded from the intermediate list to avoid feeding
+   * Routes API a duplicate waypoint when the same passenger previews twice.
+   */
   private async previewRouteWithDetour(
     trip: Trip,
     destLat: number,
     destLng: number,
     passengerId?: string,
   ): Promise<{ latitude: number; longitude: number; routeToDropoff: { latitude: number; longitude: number }[]; isDetour: boolean }> {
-    const coords: number[][] = trip.routePolyline?.coordinates;
-    if (!coords?.length || coords.length < 2) throw new NotFoundException('No se pudo calcular la ruta');
+    const plan = trip.currentRoutePlan;
+    if (!plan?.legs?.length) throw new NotFoundException('No se pudo calcular la ruta');
 
-    // Use pinned coordinates to prevent drift; fall back to polyline for legacy trips
-    const origin = trip.tripOrigin
-      ?? { lat: coords[0][1], lng: coords[0][0] };
-    const finalDest = trip.finalDestination
-      ?? { lat: coords[coords.length - 1][1], lng: coords[coords.length - 1][0] };
-    // Exclude the requesting passenger's existing waypoint (see findAvailableTrips comment).
-    const existingWaypoints = (trip.passengerWaypoints ?? [])
-      .filter(w => !passengerId || w.passengerId !== passengerId)
-      .map(w => ({ lat: w.lat, lng: w.lng }));
+    const sortedLegs = [...plan.legs].sort((a, b) => a.legIndex - b.legIndex);
+    const origin = {
+      lat: Number(sortedLegs[0].startLat),
+      lng: Number(sortedLegs[0].startLng),
+    };
+    const finalDest = {
+      lat: Number(sortedLegs[sortedLegs.length - 1].endLat),
+      lng: Number(sortedLegs[sortedLegs.length - 1].endLng),
+    };
+
+    // Resolve the requesting passenger's bookingId so we can exclude their
+    // existing stop (null if they have no active booking on this trip yet).
+    let passengerBookingId: string | null = null;
+    if (passengerId) {
+      const pb = await this.bookingsRepository.findOne({
+        where: {
+          passenger: { id: passengerId },
+          trip: { id: trip.id },
+          status: In([BookingStatus.PENDING, BookingStatus.ACCEPTED]),
+        },
+      });
+      passengerBookingId = pb?.id ?? null;
+    }
+
+    const existingWaypoints = sortedLegs
+      .filter(l => l.passengerDropOffId !== null && l.passengerDropOffId !== passengerBookingId)
+      .map(l => ({ lat: Number(l.endLat), lng: Number(l.endLng) }));
+
     const allWaypoints = [origin, ...existingWaypoints, { lat: destLat, lng: destLng }, finalDest];
-
     const { polylinePoints } = await this.directionsService.getRoute(allWaypoints);
 
-    // Find the polyline point closest to the passenger's destination
+    // Trim the polyline to end at the passenger's drop-off
     let closestIndex = 0;
     let closestDist = Infinity;
     polylinePoints.forEach(([lat, lng], i) => {

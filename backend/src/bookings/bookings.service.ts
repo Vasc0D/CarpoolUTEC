@@ -242,7 +242,12 @@ export class BookingsService {
     const savedBooking = await this.bookingsRepository.save(booking);
 
     if (wasAccepted && booking.trip.detourEnabled) {
-      const hasWaypoint = (booking.trip.passengerWaypoints ?? []).some(w => w.passengerId === passengerId);
+      // Check the current route plan's legs to see if this passenger's booking
+      // has an associated drop-off. Legacy passengerWaypoints was dropped in
+      // migration 1745900000000; plan + legs are eagerly loaded on this booking.
+      const hasWaypoint = booking.trip.currentRoutePlan?.legs?.some(
+        l => l.passengerDropOffId === bookingId,
+      ) ?? false;
       if (hasWaypoint) {
         // Async — same queue as `add`. The worker emits route_updated to all
         // active passengers on success; the driver gets it via the same
@@ -341,41 +346,23 @@ export class BookingsService {
   }
 
   /**
-   * Compute passengerEtaSeconds from the plan-based schema when available,
-   * with a legacy fallback for trips that pre-date Phase 2 or whose first
-   * recalc hasn't completed yet.
+   * ETA from the active TripRoutePlan legs.
    *
-   * Plan path: find the TripRouteLeg whose passengerDropOffId matches this
-   * booking's id, then sum durations for all legs up-to-and-including that
-   * one. Legs are sorted by legIndex so the sum is always in driving order.
-   *
-   * Legacy path: index into passengerWaypoints[] to find the stop position,
-   * then slice legDurationsSeconds[]. Falls back to originalDurationSeconds
-   * when no per-leg data exists (trip created before Phase 0).
+   * Finds the TripRouteLeg whose passengerDropOffId matches this booking's id
+   * and sums durations for legs[0..dropOff]. Returns plan.totalDurationSeconds
+   * if the recalc is still in-flight (passenger not yet wired into any leg)
+   * or 0 if the trip has no plan yet (Routes API failed on creation).
    */
   private mapToResponseDto(booking: Booking): BookingResponseDto {
     const plan = booking.trip.currentRoutePlan;
-    let passengerEtaSeconds: number;
+    let passengerEtaSeconds = 0;
 
     if (plan?.legs?.length) {
-      // Plan-based ETA — sort in place copy to avoid mutating the relation array
       const sortedLegs = [...plan.legs].sort((a, b) => a.legIndex - b.legIndex);
       const dropOffIdx = sortedLegs.findIndex(l => l.passengerDropOffId === booking.id);
       passengerEtaSeconds = dropOffIdx >= 0
         ? sortedLegs.slice(0, dropOffIdx + 1).reduce((s, l) => s + l.durationSeconds, 0)
-        // Passenger not yet wired into legs (recalc is in-flight) — use total
-        : plan.totalDurationSeconds;
-    } else {
-      // Legacy fallback for pre-Phase-2 trips
-      const legDurs = booking.trip.legDurationsSeconds ?? [];
-      const totalSeconds = legDurs.length > 0
-        ? legDurs.reduce((a, b) => a + b, 0)
-        : booking.trip.originalDurationSeconds;
-      const waypoints = booking.trip.passengerWaypoints ?? [];
-      const stopIdx = waypoints.findIndex(w => w.passengerId === booking.passenger?.id);
-      passengerEtaSeconds = stopIdx >= 0 && legDurs.length > 0
-        ? legDurs.slice(0, stopIdx + 1).reduce((a, b) => a + b, 0)
-        : totalSeconds;
+        : plan.totalDurationSeconds; // recalc in-flight — use whole-trip estimate
     }
 
     return {
