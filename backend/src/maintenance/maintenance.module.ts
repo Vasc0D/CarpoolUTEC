@@ -39,6 +39,16 @@ export class MaintenanceModule implements OnApplicationBootstrap {
       { pattern: '* * * * *' },
       { name: MAINTENANCE_JOBS.AUTO_REMOVE_NO_SHOWS, data: {} },
     );
+    await this.queue.upsertJobScheduler(
+      MAINTENANCE_JOBS.RECOMPUTE_LIVE_ETAS,
+      { every: 90_000 },
+      { name: MAINTENANCE_JOBS.RECOMPUTE_LIVE_ETAS, data: {} },
+    );
+    await this.queue.upsertJobScheduler(
+      MAINTENANCE_JOBS.AUTO_START_BOARDING,
+      { pattern: '* * * * *' },
+      { name: MAINTENANCE_JOBS.AUTO_START_BOARDING, data: {} },
+    );
     this.logger.log('Maintenance schedulers registered (1 min cadence)');
   }
 }

@@ -11,13 +11,14 @@
  * - Socket events call `queryClient.invalidateQueries({ queryKey })` to
  *   trigger a background re-fetch without clearing the cached data first.
  */
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   fetchAvailableTrips,
   fetchStopsCoverage,
   fetchActiveDriverTrip,
   fetchMyActiveBooking,
 } from '../api/tripsApi';
+import { axiosClient } from '../api/axiosClient';
 
 const POPULAR_STOPS = [
   { id: 'jockey',     name: 'Jockey Plaza',           lat: -12.0869, lng: -76.9750 },
@@ -83,6 +84,77 @@ export const useMyActiveBooking = (appMode: string) =>
     enabled: appMode === 'passenger',
     staleTime: 30_000,
   });
+
+export const useCreateBooking = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ tripId, destLat, destLng }: { tripId: string; destLat?: number; destLng?: number }) =>
+      axiosClient.post(`/bookings/${tripId}`, { destLat, destLng }).then(r => r.data),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['trips', 'available'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.myActiveBooking() });
+    },
+  });
+};
+
+export const useAcceptBooking = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (bookingId: string) => axiosClient.patch(`/bookings/${bookingId}/accept`).then(r => r.data),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.activeDriverTrip() }),
+  });
+};
+
+export const useRejectBooking = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (bookingId: string) => axiosClient.patch(`/bookings/${bookingId}/reject`).then(r => r.data),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.activeDriverTrip() }),
+  });
+};
+
+export const useCancelBooking = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (bookingId: string) => axiosClient.patch(`/bookings/${bookingId}/cancel`).then(r => r.data),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.myActiveBooking() });
+      queryClient.invalidateQueries({ queryKey: ['trips', 'available'] });
+    },
+  });
+};
+
+export const useConfirmBoarding = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (bookingId: string) => axiosClient.patch(`/bookings/${bookingId}/board`).then(r => r.data),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.myActiveBooking() }),
+  });
+};
+
+export const useCancelTrip = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (tripId: string) => axiosClient.patch(`/trips/${tripId}/cancel`).then(r => r.data),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.activeDriverTrip() }),
+  });
+};
+
+export const useStartTrip = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (tripId: string) => axiosClient.patch(`/trips/${tripId}/start`).then(r => r.data),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.activeDriverTrip() }),
+  });
+};
+
+export const useFinishTrip = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (tripId: string) => axiosClient.patch(`/trips/${tripId}/finish`).then(r => r.data),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.activeDriverTrip() }),
+  });
+};
 
 // ─── Convenience hook for cache invalidation (used by socket events) ─────────
 

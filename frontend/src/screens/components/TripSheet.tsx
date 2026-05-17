@@ -34,11 +34,23 @@ const BOOKING_STATUS_CONFIG = {
     title: 'Solicitud enviada',
     subtitle: 'Esperando confirmación del conductor.',
   },
+  PENDING_ROUTE_RECALC: {
+    icon: 'sync-outline' as const,
+    color: '#0EA5E9',
+    title: 'Calculando ruta',
+    subtitle: 'Estamos ajustando el recorrido con tu parada.',
+  },
   ACCEPTED: {
     icon: 'checkmark-circle-outline' as const,
     color: '#10B981',
     title: '¡Confirmado!',
     subtitle: 'El conductor ya te espera.',
+  },
+  ROUTE_RECALC_FAILED: {
+    icon: 'alert-circle-outline' as const,
+    color: '#EF4444',
+    title: 'No se pudo calcular la ruta',
+    subtitle: 'Intenta otra vez o elige otro viaje.',
   },
 };
 
@@ -111,8 +123,8 @@ export const TripSheet: React.FC<TripSheetProps> = ({
                 </Text>
               </View>
               <View style={styles.driverInfo}>
-                <Text style={styles.driverName}>{trip.driver.name}</Text>
-                {trip.driver.vehicle && (
+                <Text style={styles.driverName}>{trip.driver?.name || 'Sin conductor'}</Text>
+                {trip.driver?.vehicle && (
                   <Text style={styles.vehicleText}>
                     {trip.driver.vehicle.brand} · {trip.driver.vehicle.model} · {trip.driver.vehicle.color} · {trip.driver.vehicle.plate}
                   </Text>

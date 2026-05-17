@@ -12,7 +12,8 @@ import { TripStatus } from './entities/trip.entity';
  * Terminal states (COMPLETED, CANCELED) map to empty arrays.
  */
 const TRIP_TRANSITIONS: ReadonlyMap<TripStatus, ReadonlyArray<TripStatus>> = new Map([
-  [TripStatus.SCHEDULED, [TripStatus.ACTIVE, TripStatus.CANCELED]],
+  [TripStatus.SCHEDULED, [TripStatus.BOARDING, TripStatus.ACTIVE, TripStatus.CANCELED]],
+  [TripStatus.BOARDING,  [TripStatus.ACTIVE, TripStatus.CANCELED]],
   [TripStatus.ACTIVE,    [TripStatus.COMPLETED, TripStatus.CANCELED]],
   [TripStatus.COMPLETED, []],
   [TripStatus.CANCELED,  []],

@@ -1,4 +1,5 @@
 import { BookingStatus } from '../entities/booking.entity';
+import { TripStatus } from '../../trips/entities/trip.entity';
 
 export class BookingResponseDto {
     id: string;
@@ -8,6 +9,7 @@ export class BookingResponseDto {
     destLng: number | null;
     trip: {
         id: string;
+        status: TripStatus;
         departureTime: Date;
         passengerEtaSeconds: number;
         driver: {

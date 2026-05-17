@@ -28,6 +28,12 @@ export class MaintenanceProcessor extends WorkerHost {
       case MAINTENANCE_JOBS.AUTO_REMOVE_NO_SHOWS:
         await this.tripsService.autoRemoveNoShows();
         return;
+      case MAINTENANCE_JOBS.RECOMPUTE_LIVE_ETAS:
+        await this.tripsService.recomputeLiveEtas();
+        return;
+      case MAINTENANCE_JOBS.AUTO_START_BOARDING:
+        await this.tripsService.autoStartBoarding();
+        return;
       default:
         this.logger.warn(`Unknown maintenance job: ${job.name}`);
     }

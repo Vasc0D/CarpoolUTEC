@@ -9,8 +9,10 @@ import { BookingStatus } from './entities/booking.entity';
  * modelled here.
  */
 const BOOKING_TRANSITIONS: ReadonlyMap<BookingStatus, ReadonlyArray<BookingStatus>> = new Map([
-  [BookingStatus.PENDING,   [BookingStatus.ACCEPTED, BookingStatus.REJECTED, BookingStatus.CANCELED]],
+  [BookingStatus.PENDING,   [BookingStatus.PENDING_ROUTE_RECALC, BookingStatus.ACCEPTED, BookingStatus.REJECTED, BookingStatus.CANCELED]],
+  [BookingStatus.PENDING_ROUTE_RECALC, [BookingStatus.ACCEPTED, BookingStatus.ROUTE_RECALC_FAILED, BookingStatus.CANCELED]],
   [BookingStatus.ACCEPTED,  [BookingStatus.CANCELED, BookingStatus.COMPLETED]],
+  [BookingStatus.ROUTE_RECALC_FAILED, []],
   [BookingStatus.COMPLETED, []],
   [BookingStatus.REJECTED,  []],
   [BookingStatus.CANCELED,  []],

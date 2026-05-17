@@ -1,4 +1,5 @@
 import {
+  Inject,
   BadRequestException, ConflictException, ForbiddenException,
   Injectable, Logger, NotFoundException,
 } from '@nestjs/common';
@@ -14,6 +15,9 @@ import { Booking, BookingStatus } from '../bookings/entities/booking.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { GeoService } from '../geo/geo.service';
 import { DirectionsService } from '../geo/directions.service';
+import { REDIS_CLIENT } from '../common/redis.module';
+import { Redis as RedisClient } from 'ioredis';
+import type { StoredDriverLocation } from '../notifications/notifications.types';
 
 // C-1: typed search result — replaces the previous Promise<any[]> return type
 export type TripSearchResult = Trip & {
@@ -38,6 +42,7 @@ export class TripsService {
     private readonly geoService: GeoService,
     private readonly directionsService: DirectionsService,
     private readonly dataSource: DataSource,
+    @Inject(REDIS_CLIENT) private readonly redis: RedisClient,
   ) { }
 
   async create(userId: string, createTripDto: CreateTripDto): Promise<Trip> {
@@ -190,7 +195,7 @@ export class TripsService {
     // results — they have no route data and cannot be matched spatially.
     const buildBase = () =>
       this.tripsRepository.createQueryBuilder('trip')
-        .leftJoin('trip.driver', 'driver')
+        .innerJoin('trip.driver', 'driver')
         .leftJoin('driver.vehicle', 'vehicle')
         .addSelect(['driver.id', 'driver.name', 'vehicle.model', 'vehicle.color', 'vehicle.brand', 'vehicle.plate'])
         .leftJoin('trip.currentRoutePlan', 'plan')
@@ -237,7 +242,7 @@ export class TripsService {
       detourTripIds.length > 0
         ? this.tripsRepository.find({
             where: { id: In(detourTripIds) },
-            relations: ['currentRoutePlan', 'currentRoutePlan.legs'],
+            relations: ['driver', 'driver.vehicle', 'currentRoutePlan', 'currentRoutePlan.legs'],
           })
         : Promise.resolve([] as Trip[]),
       passengerId && detourTripIds.length > 0
@@ -377,15 +382,11 @@ export class TripsService {
 
     if (!trip) throw new NotFoundException('Viaje no encontrado');
     if (trip.driver.id !== driverId) throw new ForbiddenException('Solo el conductor puede iniciar el viaje');
-    TripStateMachine.assertTransition(trip.status, TripStatus.ACTIVE);
+    if (trip.status !== TripStatus.BOARDING)
+      throw new BadRequestException('El viaje debe estar en abordaje para poder iniciarse');
 
     const minutesLate = (new Date().getTime() - new Date(trip.departureTime).getTime()) / 60000;
     if (minutesLate < 0) throw new BadRequestException('Aún no es la hora de salida');
-
-    const missingPassengers = trip.bookings.some(b => b.status === BookingStatus.ACCEPTED && !b.isBoarded);
-    if (missingPassengers && minutesLate < 5) {
-      throw new BadRequestException('Debes esperar 5 minutos o a que todos suban.');
-    }
 
     trip.status = TripStatus.ACTIVE;
     const saved = await this.tripsRepository.save(trip);
@@ -484,13 +485,48 @@ export class TripsService {
     }
   }
 
+  async autoStartBoarding(): Promise<void> {
+    try {
+      const trips = await this.tripsRepository.find({
+        where: { status: TripStatus.SCHEDULED, departureTime: LessThan(new Date()) },
+        relations: ['bookings', 'bookings.passenger', 'driver'],
+      });
+
+      for (const trip of trips) {
+        const hasAccepted = trip.bookings.some(b => b.status === BookingStatus.ACCEPTED);
+        if (!hasAccepted) continue; // autoCancelEmptyTrips handles these
+
+        this.logger.log(`Auto-starting boarding for trip ${trip.id}`);
+        trip.status = TripStatus.BOARDING;
+        await this.tripsRepository.save(trip);
+
+        try {
+          this.notificationsService.notifyDriverTripBoarding(trip.driver.id, { tripId: trip.id });
+        } catch (notifyErr) {
+          this.logger.warn(`Boarding notification failed for driver on trip ${trip.id}: ${notifyErr.message}`);
+        }
+        for (const booking of trip.bookings) {
+          if (booking.status === BookingStatus.ACCEPTED) {
+            try {
+              this.notificationsService.notifyPassengerTripBoarding(booking.passenger.id, { tripId: trip.id });
+            } catch (notifyErr) {
+              this.logger.warn(`Boarding notification failed for trip ${trip.id}: ${notifyErr.message}`);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      this.logger.error('autoStartBoarding failed', err);
+    }
+  }
+
   // Triggered every minute by MaintenanceProcessor (BullMQ scheduler). See
   // autoCancelEmptyTrips above for the rationale on the move from @Cron.
   async autoRemoveNoShows(): Promise<void> {
     try {
       const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
       const trips = await this.tripsRepository.find({
-        where: { status: TripStatus.SCHEDULED, departureTime: LessThan(fiveMinutesAgo) },
+        where: { status: In([TripStatus.SCHEDULED, TripStatus.BOARDING]), departureTime: LessThan(fiveMinutesAgo) },
         relations: ['bookings', 'bookings.passenger', 'driver'],
       });
 
@@ -590,6 +626,55 @@ export class TripsService {
       })),
       isDetour: false,
     };
+  }
+
+  async recomputeLiveEtas(): Promise<void> {
+    const trips = await this.tripsRepository.find({
+      where: { status: In([TripStatus.BOARDING, TripStatus.ACTIVE]) },
+      relations: ['currentRoutePlan', 'currentRoutePlan.legs'],
+    });
+
+    for (const trip of trips) {
+      try {
+        const rawLoc = await this.redis.get(`driver_location:${trip.id}`);
+        if (!rawLoc || !trip.currentRoutePlan?.legs?.length) continue;
+        const loc = JSON.parse(rawLoc) as StoredDriverLocation;
+        const bookings = await this.bookingsRepository.find({
+          where: { trip: { id: trip.id }, status: BookingStatus.ACCEPTED },
+          relations: ['passenger'],
+        });
+        if (!bookings.length) continue;
+
+        const bookingIds = new Set(bookings.map(b => b.id));
+        const sortedLegs = [...trip.currentRoutePlan.legs].sort((a, b) => a.legIndex - b.legIndex);
+        const remainingStops = sortedLegs
+          .filter(l => l.passengerDropOffId && bookingIds.has(l.passengerDropOffId))
+          .map(l => ({ bookingId: l.passengerDropOffId!, lat: Number(l.endLat), lng: Number(l.endLng) }));
+        const finalLeg = sortedLegs[sortedLegs.length - 1];
+        const finalDest = { lat: Number(finalLeg.endLat), lng: Number(finalLeg.endLng) };
+        const waypoints = [
+          { lat: loc.lat, lng: loc.lng },
+          ...remainingStops.map(s => ({ lat: s.lat, lng: s.lng })),
+          finalDest,
+        ];
+        if (waypoints.length < 2) continue;
+
+        const { legDurations, durationSeconds } = await this.directionsService.getRoute(waypoints);
+        let cumulative = 0;
+        for (let i = 0; i < remainingStops.length; i++) {
+          cumulative += legDurations[i] ?? 0;
+          const booking = bookings.find(b => b.id === remainingStops[i].bookingId);
+          if (booking) {
+            this.notificationsService.notifyPassengerEtaUpdated(booking.passenger.id, {
+              bookingId: booking.id,
+              passengerEtaSeconds: cumulative || durationSeconds,
+            });
+          }
+        }
+      } catch (err: any) {
+        this.logger.warn(`recomputeLiveEtas failed for trip ${trip.id}: ${err.message}`);
+      }
+    }
   }
 
   /**

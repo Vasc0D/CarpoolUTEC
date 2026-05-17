@@ -12,6 +12,8 @@ export const MAINTENANCE_QUEUE = 'trip-maintenance';
 export const MAINTENANCE_JOBS = {
   AUTO_CANCEL_EMPTY: 'auto-cancel-empty',
   AUTO_REMOVE_NO_SHOWS: 'auto-remove-no-shows',
+  RECOMPUTE_LIVE_ETAS: 'recompute-live-etas',
+  AUTO_START_BOARDING: 'auto-start-boarding',
 } as const;
 
 export type MaintenanceJobName = (typeof MAINTENANCE_JOBS)[keyof typeof MAINTENANCE_JOBS];

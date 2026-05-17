@@ -26,7 +26,8 @@ export const AppDataSource = new DataSource({
   // CLI loads compiled JS in dist/ (`npm run build` first) OR raw TS via
   // ts-node when invoked through the npm scripts. Glob covers both.
   entities: ['src/**/*.entity.ts', 'dist/**/*.entity.js'],
-  migrations: ['src/migrations/*.ts', 'dist/migrations/*.js'],
+  migrations: ['src/migrations/*.ts'],
+  migrationsTransactionMode: 'each',
   synchronize: false,
   logging: ['error', 'warn', 'migration'],
 });

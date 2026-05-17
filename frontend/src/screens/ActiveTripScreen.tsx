@@ -152,6 +152,10 @@ export const ActiveTripScreen = () => {
             mapRef.current?.animateCamera({ center: coords }, { duration: 800 });
         });
 
+        socket.on('eta_updated', (data: { bookingId: string; passengerEtaSeconds: number }) => {
+            setLiveEtaSeconds(data.passengerEtaSeconds);
+        });
+
         socket.on('trip_finished', (data: { tripId: string }) => {
             if (data.tripId !== tripId) return;
             setShowFinishedModal(true);

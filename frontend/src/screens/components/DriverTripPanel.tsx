@@ -57,7 +57,7 @@ export const DriverTripPanel: React.FC<DriverTripPanelProps> = ({
   const insets = useSafeAreaInsets();
 
   const activeBookings = trip.bookings.filter(
-    b => b.status !== 'REJECTED' && b.status !== 'CANCELED',
+    b => b.status !== 'REJECTED' && b.status !== 'CANCELED' && b.status !== 'ROUTE_RECALC_FAILED',
   );
   const acceptedBookings = trip.bookings.filter(b => b.status === 'ACCEPTED');
   const acceptedCount = acceptedBookings.length;
@@ -69,7 +69,7 @@ export const DriverTripPanel: React.FC<DriverTripPanelProps> = ({
   const allBoarded = acceptedBookings.length > 0 && acceptedBookings.every(b => b.isBoarded);
   const graceExpired = minutesLate >= 5;
   const canStart =
-    trip.status === 'SCHEDULED' && minutesLate >= 0 && (allBoarded || graceExpired);
+    trip.status === 'BOARDING' && (allBoarded || graceExpired);
 
   // ── Route stop list from plan legs ─────────────────────────────────────────
   const plan = trip.currentRoutePlan;
@@ -137,7 +137,7 @@ export const DriverTripPanel: React.FC<DriverTripPanelProps> = ({
           <Text style={styles.cardTitle}>Viaje publicado</Text>
           <View style={styles.statusBadge}>
             <Text style={styles.statusText}>
-              {trip.status === 'ACTIVE' ? 'En curso' : 'En espera'}
+              {trip.status === 'ACTIVE' ? 'En curso' : trip.status === 'BOARDING' ? 'Abordaje' : 'En espera'}
             </Text>
           </View>
         </View>
@@ -259,6 +259,10 @@ export const DriverTripPanel: React.FC<DriverTripPanelProps> = ({
                         <Ionicons name="close" size={15} color="#DC2626" />
                       </TouchableOpacity>
                     </View>
+                  ) : b.status === 'PENDING_ROUTE_RECALC' ? (
+                    <View style={[styles.badge, { backgroundColor: '#DBEAFE' }]}>
+                      <Text style={[styles.badgeText, { color: '#2563EB' }]}>Calculando ruta</Text>
+                    </View>
                   ) : b.status === 'ACCEPTED' ? (
                     <View style={{ alignItems: 'flex-end', gap: 4 }}>
                       <View style={[styles.badge, { backgroundColor: '#DCFCE7' }]}>
@@ -303,16 +307,13 @@ export const DriverTripPanel: React.FC<DriverTripPanelProps> = ({
           )}
 
           {/* Boarding wait hint */}
-          {trip.status === 'SCHEDULED' &&
-            minutesLate >= 0 &&
+          {trip.status === 'BOARDING' &&
             !canStart &&
             acceptedBookings.length > 0 && (
               <View style={styles.waitRow}>
                 <Ionicons name="time-outline" size={15} color="#F59E0B" />
                 <Text style={styles.waitText}>
-                  {graceExpired
-                    ? 'Puedes iniciar aunque falten pasajeros'
-                    : `Esperando que todos suban al auto (${Math.ceil(5 - minutesLate)} min restantes)`}
+                  {`Esperando que todos suban al auto (${Math.ceil(5 - minutesLate)} min restantes)`}
                 </Text>
               </View>
             )}

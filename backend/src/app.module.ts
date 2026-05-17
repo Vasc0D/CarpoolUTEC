@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
@@ -14,6 +14,7 @@ import { AuthModule } from './auth/auth.module';
 import { RedisModule } from './common/redis.module';
 import { RouteRecalcModule } from './route-recalc/route-recalc.module';
 import { MaintenanceModule } from './maintenance/maintenance.module';
+import { IdempotencyInterceptor } from './common/idempotency.interceptor';
 
 @Module({
   imports: [
@@ -84,6 +85,7 @@ import { MaintenanceModule } from './maintenance/maintenance.module';
   providers: [
     // Apply rate limiting globally via DI (works with guards that need injected services)
     { provide: APP_GUARD, useClass: ThrottlerGuard },
+    { provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor },
   ],
 })
 export class AppModule {}

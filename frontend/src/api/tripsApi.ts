@@ -40,7 +40,7 @@ export interface TripMarker {
 
 export interface BookingSummary {
   id: string;
-  status: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'CANCELED' | 'COMPLETED';
+  status: 'PENDING' | 'PENDING_ROUTE_RECALC' | 'ACCEPTED' | 'ROUTE_RECALC_FAILED' | 'REJECTED' | 'CANCELED' | 'COMPLETED';
   isBoarded?: boolean;
   passenger: { id: string; name: string };
   destLat?: number;
@@ -50,7 +50,7 @@ export interface BookingSummary {
 export interface DriverTripSummary {
   id: string;
   departureTime: string;
-  status: 'SCHEDULED' | 'ACTIVE';
+  status: 'SCHEDULED' | 'BOARDING' | 'ACTIVE';
   availableSeats: number;
   pricePerSeat: number;
   currentRoutePlan?: RoutePlanSummary | null;
@@ -60,7 +60,8 @@ export interface DriverTripSummary {
 export interface ActiveBooking {
   id: string;
   tripId: string;
-  status: 'PENDING' | 'ACCEPTED';
+  status: 'PENDING' | 'PENDING_ROUTE_RECALC' | 'ACCEPTED' | 'ROUTE_RECALC_FAILED';
+  tripStatus: 'SCHEDULED' | 'BOARDING' | 'ACTIVE';
   departureTime?: string;
   passengerEtaSeconds?: number;
   destLat?: number;
@@ -102,18 +103,24 @@ export const fetchStopsCoverage = async (
 export const fetchActiveDriverTrip = async (): Promise<DriverTripSummary | null> => {
   const { data } = await axiosClient.get<DriverTripSummary[]>('/trips/my-trips');
   return (data as DriverTripSummary[]).find(
-    t => t.status === 'SCHEDULED' || t.status === 'ACTIVE',
+    t => t.status === 'SCHEDULED' || t.status === 'BOARDING' || t.status === 'ACTIVE',
   ) ?? null;
 };
 
 export const fetchMyActiveBooking = async (): Promise<ActiveBooking | null> => {
   const { data } = await axiosClient.get<any[]>('/bookings/me');
-  const active = data.find(b => b.status === 'PENDING' || b.status === 'ACCEPTED');
+  const active = data.find(b =>
+    b.status === 'PENDING' ||
+    b.status === 'PENDING_ROUTE_RECALC' ||
+    b.status === 'ACCEPTED' ||
+    b.status === 'ROUTE_RECALC_FAILED',
+  );
   if (!active) return null;
   return {
     id: active.id,
     tripId: active.trip.id,
     status: active.status,
+    tripStatus: active.trip.status,
     departureTime: active.trip.departureTime,
     passengerEtaSeconds: active.trip.passengerEtaSeconds ?? undefined,
     driver: active.trip.driver,

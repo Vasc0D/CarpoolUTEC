@@ -8,6 +8,7 @@ import { TripRoutePlan } from './trip-route-plan.entity';
 
 export enum TripStatus {
   SCHEDULED = 'SCHEDULED',
+  BOARDING = 'BOARDING',
   ACTIVE = 'ACTIVE',
   COMPLETED = 'COMPLETED',
   CANCELED = 'CANCELED',

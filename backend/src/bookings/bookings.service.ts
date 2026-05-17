@@ -41,7 +41,7 @@ export class BookingsService {
     const activeBooking = await this.bookingsRepository.findOne({
       where: {
         passenger: { id: passengerId },
-        status: In([BookingStatus.PENDING, BookingStatus.ACCEPTED]),
+        status: In([BookingStatus.PENDING, BookingStatus.PENDING_ROUTE_RECALC, BookingStatus.ACCEPTED]),
       },
     });
     if (activeBooking) {
@@ -52,6 +52,7 @@ export class BookingsService {
     if (!passenger) throw new NotFoundException('Pasajero no encontrado');
 
     const isAutoAccept = trip.autoAccept;
+    const needsRouteRecalc = isAutoAccept && trip.detourEnabled && destLat != null && destLng != null;
 
     // Phase 1: atomically reserve the seat and persist the booking. Wrapping
     // both in a single DB transaction means a save() failure rolls back the
@@ -72,7 +73,9 @@ export class BookingsService {
       return manager.save(Booking, manager.create(Booking, {
         trip,
         passenger,
-        status: isAutoAccept ? BookingStatus.ACCEPTED : BookingStatus.PENDING,
+        status: needsRouteRecalc
+          ? BookingStatus.PENDING_ROUTE_RECALC
+          : isAutoAccept ? BookingStatus.ACCEPTED : BookingStatus.PENDING,
         destLat: destLat ?? null,
         destLng: destLng ?? null,
       }));
@@ -84,15 +87,24 @@ export class BookingsService {
     // fails (cancels the booking + restores the seat + emits
     // `booking_route_failed`). Frontend updates the ETA via the
     // `route_updated` socket event when the worker succeeds.
-    if (isAutoAccept && trip.detourEnabled && destLat != null && destLng != null) {
-      await this.routeRecalcQueue.enqueue({
-        op: 'add',
-        tripId: trip.id,
-        bookingId: savedBooking.id,
-        passengerId,
-        destLat,
-        destLng,
-      });
+    if (needsRouteRecalc) {
+      try {
+        await this.routeRecalcQueue.enqueue({
+          op: 'add',
+          tripId: trip.id,
+          bookingId: savedBooking.id,
+          passengerId,
+          destLat,
+          destLng,
+        });
+      } catch (err: any) {
+        await this.markRouteRecalcFailed(savedBooking.id, trip.id);
+        this.notificationsService.notifyBookingRouteFailed(passengerId, {
+          bookingId: savedBooking.id,
+          tripId: trip.id,
+          reason: err.message ?? 'No se pudo encolar el recálculo de ruta',
+        });
+      }
     }
 
     this.notificationsService.notifyDriverNewRequest(trip.driver.id, {
@@ -123,7 +135,13 @@ export class BookingsService {
 
     if (!booking) throw new NotFoundException('Reserva no encontrada');
     if (booking.trip.driver.id !== driverId) throw new ForbiddenException('Solo el conductor puede aceptar reservas');
-    BookingStateMachine.assertTransition(booking.status, BookingStatus.ACCEPTED);
+    const destLat = booking.destLat != null ? Number(booking.destLat) : null;
+    const destLng = booking.destLng != null ? Number(booking.destLng) : null;
+    const needsRouteRecalc = booking.trip.detourEnabled && destLat != null && destLng != null;
+    BookingStateMachine.assertTransition(
+      booking.status,
+      needsRouteRecalc ? BookingStatus.PENDING_ROUTE_RECALC : BookingStatus.ACCEPTED,
+    );
 
     // Phase 1: atomic seat decrement + status flip in one DB transaction.
     const savedBooking = await this.dataSource.transaction(async (manager: EntityManager) => {
@@ -136,32 +154,38 @@ export class BookingsService {
       if (updateResult.affected === 0) {
         throw new BadRequestException('El viaje ya está lleno');
       }
-      booking.status = BookingStatus.ACCEPTED;
+      booking.status = needsRouteRecalc ? BookingStatus.PENDING_ROUTE_RECALC : BookingStatus.ACCEPTED;
       return manager.save(Booking, booking);
     });
-
-    const destLat = booking.destLat != null ? Number(booking.destLat) : null;
-    const destLng = booking.destLng != null ? Number(booking.destLng) : null;
 
     // Phase 2: enqueue route recalc so the HTTP response returns immediately.
     // The worker handles Routes API + retries; on terminal failure it cancels
     // this booking and emits `booking_route_failed` to the passenger and
     // `booking_canceled` to the driver. Frontend updates ETA via `route_updated`
     // when the worker succeeds.
-    if (booking.trip.detourEnabled && destLat != null && destLng != null) {
-      await this.routeRecalcQueue.enqueue({
-        op: 'add',
-        tripId: booking.trip.id,
-        bookingId: savedBooking.id,
-        passengerId: booking.passenger.id,
-        destLat,
-        destLng,
-      });
+    if (needsRouteRecalc) {
+      try {
+        await this.routeRecalcQueue.enqueue({
+          op: 'add',
+          tripId: booking.trip.id,
+          bookingId: savedBooking.id,
+          passengerId: booking.passenger.id,
+          destLat: destLat!,
+          destLng: destLng!,
+        });
+      } catch (err: any) {
+        await this.markRouteRecalcFailed(savedBooking.id, booking.trip.id);
+        this.notificationsService.notifyBookingRouteFailed(booking.passenger.id, {
+          bookingId: savedBooking.id,
+          tripId: booking.trip.id,
+          reason: err.message ?? 'No se pudo encolar el recálculo de ruta',
+        });
+      }
     }
 
     this.notificationsService.notifyPassengerStatusChange(booking.passenger.id, {
       bookingId: savedBooking.id,
-      status: 'ACCEPTED',
+      status: needsRouteRecalc ? 'PENDING_ROUTE_RECALC' : 'ACCEPTED',
     });
 
     // Reload with fresh trip + current plan so mapToResponseDto reads from
@@ -220,10 +244,11 @@ export class BookingsService {
       throw new ForbiddenException('No puedes cancelar una reserva que no es tuya');
     BookingStateMachine.assertTransition(booking.status, BookingStatus.CANCELED);
 
-    const wasAccepted = booking.status === BookingStatus.ACCEPTED;
+    const hadReservedSeat = booking.status === BookingStatus.ACCEPTED
+      || booking.status === BookingStatus.PENDING_ROUTE_RECALC;
     booking.status = BookingStatus.CANCELED;
 
-    if (wasAccepted) {
+    if (hadReservedSeat) {
       // H-3: atomic increment
       await this.tripsRepository
         .createQueryBuilder()
@@ -235,7 +260,7 @@ export class BookingsService {
 
     const savedBooking = await this.bookingsRepository.save(booking);
 
-    if (wasAccepted && booking.trip.detourEnabled) {
+    if (hadReservedSeat && booking.trip.detourEnabled) {
       // Check the current route plan's legs to see if this passenger's booking
       // has an associated drop-off. Legacy passengerWaypoints was dropped in
       // migration 1745900000000; plan + legs are eagerly loaded on this booking.
@@ -263,6 +288,16 @@ export class BookingsService {
       passengerName: booking.passenger.name,
     });
 
+    if (hadReservedSeat && [TripStatus.SCHEDULED, TripStatus.BOARDING].includes(booking.trip.status)) {
+      const remainingAccepted = await this.bookingsRepository.count({
+        where: { trip: { id: booking.trip.id }, status: BookingStatus.ACCEPTED },
+      });
+      if (remainingAccepted === 0) {
+        await this.tripsRepository.update(booking.trip.id, { status: TripStatus.CANCELED });
+        this.notificationsService.notifyDriverTripAutoCanceled(booking.trip.driver.id, { tripId: booking.trip.id });
+      }
+    }
+
     return this.mapToResponseDto(savedBooking);
   }
 
@@ -280,6 +315,15 @@ export class BookingsService {
       throw new ForbiddenException('Esta reserva no te pertenece');
     if (booking.status !== BookingStatus.ACCEPTED)
       throw new BadRequestException('Solo puedes confirmar subida en una reserva aceptada');
+
+    const isAtOrAfterDeparture = new Date() >= new Date(booking.trip.departureTime);
+    if (booking.trip.status === TripStatus.SCHEDULED && isAtOrAfterDeparture) {
+      // Auto-transition in case the maintenance job hasn't run yet this minute
+      await this.tripsRepository.update(booking.trip.id, { status: TripStatus.BOARDING });
+      booking.trip.status = TripStatus.BOARDING;
+    }
+    if (booking.trip.status !== TripStatus.BOARDING && booking.trip.status !== TripStatus.ACTIVE)
+      throw new BadRequestException('Solo puedes confirmar subida cuando el viaje está en abordaje o activo');
 
     booking.isBoarded = true;
     const saved = await this.bookingsRepository.save(booking);
@@ -367,6 +411,7 @@ export class BookingsService {
       destLng: booking.destLng,
       trip: {
         id: booking.trip.id,
+        status: booking.trip.status,
         departureTime: booking.trip.departureTime,
         passengerEtaSeconds,
         driver: {
@@ -388,5 +433,19 @@ export class BookingsService {
       },
       createdAt: booking.createdAt,
     };
+  }
+
+  private async markRouteRecalcFailed(bookingId: string, tripId: string): Promise<void> {
+    await this.dataSource.transaction(async (manager: EntityManager) => {
+      const booking = await manager.findOne(Booking, { where: { id: bookingId } });
+      if (!booking || booking.status !== BookingStatus.PENDING_ROUTE_RECALC) return;
+      await manager.update(Booking, bookingId, { status: BookingStatus.ROUTE_RECALC_FAILED });
+      await manager
+        .createQueryBuilder()
+        .update(Trip)
+        .set({ availableSeats: () => '"availableSeats" + 1' })
+        .where('id = :id', { id: tripId })
+        .execute();
+    });
   }
 }

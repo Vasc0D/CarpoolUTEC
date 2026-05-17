@@ -1,6 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { RouteCache } from './route-cache';
+import { createHash } from 'crypto';
+import { Redis as RedisClient } from 'ioredis';
+import { REDIS_CLIENT } from '../common/redis.module';
 
 type RouteResult = {
   polylinePoints: [number, number][];
@@ -28,7 +30,7 @@ type RouteResult = {
 export class DirectionsService {
   private readonly logger = new Logger(DirectionsService.name);
   private readonly apiKey: string;
-  private readonly cache = new RouteCache<RouteResult>(500, 5 * 60 * 1000);
+  private readonly cacheTtlSeconds = 5 * 60;
 
   private static readonly ENDPOINT = 'https://routes.googleapis.com/directions/v2:computeRoutes';
   // Routes v2 requires an explicit field mask; omitting fields here means they won't come back.
@@ -45,7 +47,10 @@ export class DirectionsService {
   // Bucket departure_time to 5-minute windows so repeated previews collide.
   private static readonly DEPARTURE_BUCKET_MS = 5 * 60 * 1000;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    @Inject(REDIS_CLIENT) private readonly redis: RedisClient,
+  ) {
     this.apiKey = this.configService.getOrThrow<string>('GOOGLE_MAPS_KEY');
   }
 
@@ -53,7 +58,7 @@ export class DirectionsService {
     if (waypoints.length < 2) throw new Error('Se necesitan al menos 2 puntos');
 
     const cacheKey = this.buildCacheKey(waypoints, departureTime);
-    const hit = this.cache.get(cacheKey);
+    const hit = await this.getCached(cacheKey);
     if (hit) {
       this.logger.debug(`Routes cache HIT for key: ${cacheKey}`);
       return hit;
@@ -100,7 +105,7 @@ export class DirectionsService {
       ?? intermediates.map((_, i) => i);
 
     const result: RouteResult = { polylinePoints, durationSeconds, legDurations, waypointOrder };
-    this.cache.set(cacheKey, result);
+    await this.setCached(cacheKey, result);
     return result;
   }
 
@@ -113,7 +118,26 @@ export class DirectionsService {
       ? departureTime.getTime()
       : Date.now();
     const bucket = Math.floor(refMs / DirectionsService.DEPARTURE_BUCKET_MS);
-    return `${coords}#${bucket}`;
+    const raw = `${coords}#${bucket}`;
+    return `route_cache:${createHash('sha256').update(raw).digest('hex')}`;
+  }
+
+  private async getCached(key: string): Promise<RouteResult | undefined> {
+    try {
+      const raw = await this.redis.get(key);
+      return raw ? JSON.parse(raw) as RouteResult : undefined;
+    } catch (err: any) {
+      this.logger.warn(`Routes Redis cache read failed: ${err.message}`);
+      return undefined;
+    }
+  }
+
+  private async setCached(key: string, value: RouteResult): Promise<void> {
+    try {
+      await this.redis.set(key, JSON.stringify(value), 'EX', this.cacheTtlSeconds);
+    } catch (err: any) {
+      this.logger.warn(`Routes Redis cache write failed: ${err.message}`);
+    }
   }
 
   private toLatLngWaypoint(p: { lat: number; lng: number }) {

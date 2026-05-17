@@ -4,6 +4,7 @@ import type {
   NewBookingRequestPayload,
   BookingStatusChangedPayload,
   TripCanceledPayload,
+  TripBoardingPayload,
   TripStartedPayload,
   TripFinishedPayload,
   PassengerBoardedPayload,
@@ -31,6 +32,14 @@ export class NotificationsService {
 
   notifyPassengerTripCanceled(passengerId: string, payload: TripCanceledPayload): void {
     this.notificationsGateway.server.to(passengerId).emit('trip_canceled', payload);
+  }
+
+  notifyDriverTripBoarding(driverId: string, payload: TripBoardingPayload): void {
+    this.notificationsGateway.server.to(driverId).emit('trip_boarding', payload);
+  }
+
+  notifyPassengerTripBoarding(passengerId: string, payload: TripBoardingPayload): void {
+    this.notificationsGateway.server.to(passengerId).emit('trip_boarding', payload);
   }
 
   notifyPassengerTripStarted(passengerId: string, payload: TripStartedPayload): void {

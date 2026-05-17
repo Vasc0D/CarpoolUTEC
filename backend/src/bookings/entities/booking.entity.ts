@@ -4,7 +4,9 @@ import { User } from '../../users/entities/user.entity';
 
 export enum BookingStatus {
     PENDING = 'PENDING',
+    PENDING_ROUTE_RECALC = 'PENDING_ROUTE_RECALC',
     ACCEPTED = 'ACCEPTED',
+    ROUTE_RECALC_FAILED = 'ROUTE_RECALC_FAILED',
     REJECTED = 'REJECTED',
     CANCELED = 'CANCELED',
     COMPLETED = 'COMPLETED',

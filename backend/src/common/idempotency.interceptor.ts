@@ -2,148 +2,124 @@ import {
   CallHandler,
   ConflictException,
   ExecutionContext,
+  HttpException,
   Injectable,
-  Logger,
   NestInterceptor,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { Observable, from, throwError } from 'rxjs';
-import { catchError, tap } from 'rxjs/operators';
-import { createHash, randomUUID } from 'crypto';
+import { Inject } from '@nestjs/common';
+import { Observable, from, lastValueFrom } from 'rxjs';
+import { createHash } from 'crypto';
+import { Redis as RedisClient } from 'ioredis';
+import { REDIS_CLIENT } from './redis.module';
 
-type CacheEntry = {
-  bodyHash: string;
-  expiresAt: number;
-  // null while in-flight; set to {value} on success or {error} on failure.
-  outcome: { value: unknown } | { error: unknown } | null;
-  // Resolves when the in-flight handler finishes (any outcome).
-  done: Promise<void>;
-  resolveDone: () => void;
-};
+type StoredOutcome =
+  | { bodyHash: string; ok: true; value: unknown }
+  | { bodyHash: string; ok: false; status: number; message: string | string[] };
 
-/**
- * Idempotency-Key interceptor.
- *
- * Clients can opt in by sending `Idempotency-Key: <opaque-string>` on a
- * mutating request. The first response (success or error) for a given
- * (user, method, path, key) is cached for 1 hour and replayed verbatim
- * on subsequent calls — the handler runs at most once.
- *
- * Concurrent retries that arrive while the original handler is still
- * running await the same outcome instead of double-executing. This is
- * what protects POST /bookings/:tripId from the React-StrictMode-style
- * double-fire and from network-layer retries.
- *
- * If the same key is reused with a different request body, we return
- * 422 Unprocessable Entity per the de-facto Idempotency-Key spec
- * (Stripe, IETF draft-ietf-httpapi-idempotency-key-header).
- *
- * In-process cache only; multi-instance deploys need a shared store
- * (Redis), which lands in Phase 1 alongside BullMQ.
- */
 @Injectable()
 export class IdempotencyInterceptor implements NestInterceptor {
-  private readonly logger = new Logger(IdempotencyInterceptor.name);
-  private readonly store = new Map<string, CacheEntry>();
-  private readonly ttlMs = 60 * 60 * 1000; // 1 hour
-  private readonly maxEntries = 10_000;
+  private readonly ttlSeconds = 60 * 60;
+  private readonly waitMs = 50;
+  private readonly maxWaitMs = 30_000;
+
+  constructor(@Inject(REDIS_CLIENT) private readonly redis: RedisClient) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
+    return from(this.handle(context, next));
+  }
+
+  private async handle(context: ExecutionContext, next: CallHandler): Promise<unknown> {
     const req = context.switchToHttp().getRequest();
     const headerKey = req.headers['idempotency-key'] as string | undefined;
+    if (!headerKey) return lastValueFrom(next.handle());
 
-    // Idempotency is opt-in. Without the header, behave normally.
-    if (!headerKey) return next.handle();
-
-    // Only safeguard mutating verbs — GET/HEAD/OPTIONS are idempotent by HTTP semantics.
     const method = (req.method as string).toUpperCase();
     if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') {
-      return next.handle();
+      return lastValueFrom(next.handle());
     }
 
     if (typeof headerKey !== 'string' || headerKey.length === 0 || headerKey.length > 200) {
-      return throwError(() => new UnprocessableEntityException('Idempotency-Key inválido'));
+      throw new UnprocessableEntityException('Idempotency-Key inválido');
     }
 
     const userId: string = req.user?.id ?? 'anon';
     const path: string = req.originalUrl ?? req.url ?? '';
-    const cacheKey = `${userId}:${method}:${path}:${headerKey}`;
+    const cacheKey = `idempotency:${userId}:${method}:${path}:${headerKey}`;
+    const lockKey = `${cacheKey}:lock`;
     const bodyHash = this.hashBody(req.body);
 
-    this.evictExpiredIfNeeded();
-    const existing = this.store.get(cacheKey);
+    const cached = await this.redis.get(cacheKey);
+    if (cached) return this.replay(cached, bodyHash);
 
-    if (existing) {
-      if (existing.bodyHash !== bodyHash) {
-        // Spec: reusing a key with different params is a client bug, not a retry.
-        return throwError(() =>
-          new UnprocessableEntityException(
-            'Idempotency-Key fue reutilizada con parámetros diferentes',
-          ),
-        );
-      }
-      this.logger.debug(`Idempotency replay: ${cacheKey}`);
-      return from(this.replay(existing));
+    const acquired = await this.redis.set(lockKey, bodyHash, 'EX', this.ttlSeconds, 'NX');
+    if (acquired !== 'OK') {
+      return this.waitForOutcome(cacheKey, lockKey, bodyHash);
     }
 
-    // Register in-flight entry up front so concurrent retries await the same handler.
-    let resolveDone!: () => void;
-    const done = new Promise<void>(r => { resolveDone = r; });
-    const entry: CacheEntry = {
-      bodyHash,
-      expiresAt: Date.now() + this.ttlMs,
-      outcome: null,
-      done,
-      resolveDone,
-    };
-    this.store.set(cacheKey, entry);
-
-    return next.handle().pipe(
-      tap(value => {
-        entry.outcome = { value };
-        entry.resolveDone();
-      }),
-      catchError(error => {
-        // We deliberately cache the error too: a 400 returned to the first
-        // call must be the same response on the retry (idempotency means
-        // "ran once" — not "kept retrying until success").
-        entry.outcome = { error };
-        entry.resolveDone();
-        return throwError(() => error);
-      }),
-    );
+    try {
+      const value = await lastValueFrom(next.handle());
+      await this.store(cacheKey, { bodyHash, ok: true, value });
+      return value;
+    } catch (err: any) {
+      const status = err instanceof HttpException ? err.getStatus() : 500;
+      const response = err instanceof HttpException ? err.getResponse() : err?.message;
+      const message =
+        typeof response === 'object' && response !== null && 'message' in response
+          ? (response as any).message
+          : String(response ?? 'Error interno');
+      await this.store(cacheKey, { bodyHash, ok: false, status, message });
+      throw err;
+    } finally {
+      await this.redis.del(lockKey).catch(() => undefined);
+    }
   }
 
-  private async replay(entry: CacheEntry): Promise<unknown> {
-    if (!entry.outcome) await entry.done;
-    if (!entry.outcome) throw new ConflictException('Solicitud idempotente sin resolver');
-    if ('error' in entry.outcome) throw entry.outcome.error;
-    return entry.outcome.value;
+  private async waitForOutcome(cacheKey: string, lockKey: string, bodyHash: string): Promise<unknown> {
+    const deadline = Date.now() + this.maxWaitMs;
+    while (Date.now() < deadline) {
+      const [cached, inFlightHash] = await Promise.all([
+        this.redis.get(cacheKey),
+        this.redis.get(lockKey),
+      ]);
+      if (cached) return this.replay(cached, bodyHash);
+      if (inFlightHash && inFlightHash !== bodyHash) {
+        throw new UnprocessableEntityException('Idempotency-Key fue reutilizada con parámetros diferentes');
+      }
+      await new Promise(r => setTimeout(r, this.waitMs));
+    }
+    throw new ConflictException('Solicitud idempotente aún en proceso');
+  }
+
+  private async store(cacheKey: string, outcome: StoredOutcome): Promise<void> {
+    await this.redis.set(cacheKey, JSON.stringify(outcome), 'EX', this.ttlSeconds);
+  }
+
+  private replay(raw: string, bodyHash: string): unknown {
+    const outcome = JSON.parse(raw) as StoredOutcome;
+    if (outcome.bodyHash !== bodyHash) {
+      throw new UnprocessableEntityException('Idempotency-Key fue reutilizada con parámetros diferentes');
+    }
+    if (!outcome.ok) {
+      throw new HttpException({ message: outcome.message }, outcome.status);
+    }
+    return outcome.value;
   }
 
   private hashBody(body: unknown): string {
-    // Stable JSON: stringify with sorted keys so {a,b} and {b,a} share the same hash.
-    const stable = JSON.stringify(body ?? null, Object.keys(body ?? {}).sort());
+    const stable = JSON.stringify(this.sort(body ?? null));
     return createHash('sha256').update(stable).digest('hex');
   }
 
-  private evictExpiredIfNeeded(): void {
-    if (this.store.size < this.maxEntries) return;
-    const now = Date.now();
-    for (const [key, entry] of this.store) {
-      if (entry.expiresAt < now) this.store.delete(key);
-      if (this.store.size < this.maxEntries * 0.9) return;
+  private sort(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map(v => this.sort(v));
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([k, v]) => [k, this.sort(v)]),
+      );
     }
-    // If still over cap (no expirations), drop the oldest insertion.
-    if (this.store.size >= this.maxEntries) {
-      const oldest = this.store.keys().next().value;
-      if (oldest !== undefined) this.store.delete(oldest);
-    }
-  }
-
-  /** Test/diagnostic only. */
-  // istanbul ignore next
-  generateKey(): string {
-    return randomUUID();
+    return value;
   }
 }

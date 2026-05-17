@@ -14,10 +14,14 @@ export interface NewBookingRequestPayload {
 
 export interface BookingStatusChangedPayload {
   bookingId: string;
-  status: 'ACCEPTED' | 'REJECTED';
+  status: 'PENDING_ROUTE_RECALC' | 'ACCEPTED' | 'REJECTED' | 'ROUTE_RECALC_FAILED';
 }
 
 export interface TripCanceledPayload {
+  tripId: string;
+}
+
+export interface TripBoardingPayload {
   tripId: string;
 }
 

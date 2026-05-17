@@ -2,7 +2,6 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
-import { IdempotencyInterceptor } from './common/idempotency.interceptor';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -28,12 +27,6 @@ async function bootstrap() {
     forbidNonWhitelisted: true,
     transform: true,
   }));
-
-  // Idempotency-Key support for mutating endpoints. Opt-in: clients only need
-  // to send the header on flows that must run at most once (booking creation,
-  // accept, etc.). The interceptor short-circuits replays with the cached
-  // response and rejects key reuse with a different body.
-  app.useGlobalInterceptors(new IdempotencyInterceptor());
 
   await app.listen(process.env.PORT ?? 3000);
 }

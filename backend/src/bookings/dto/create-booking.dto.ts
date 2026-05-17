@@ -1,4 +1,4 @@
-import { IsDefined, IsNumber, Max, Min, ValidateIf } from 'class-validator';
+import { IsDefined, IsLatitude, IsLongitude, IsNumber, ValidateIf } from 'class-validator';
 
 /**
  * Body for POST /bookings/:tripId.
@@ -16,14 +16,12 @@ export class CreateBookingDto {
     @ValidateIf((o: CreateBookingDto) => o.destLat !== undefined || o.destLng !== undefined)
     @IsDefined({ message: 'destLat es requerido cuando se envía destLng' })
     @IsNumber({ allowNaN: false, allowInfinity: false })
-    @Min(-90)
-    @Max(90)
+    @IsLatitude()
     destLat?: number;
 
     @ValidateIf((o: CreateBookingDto) => o.destLat !== undefined || o.destLng !== undefined)
     @IsDefined({ message: 'destLng es requerido cuando se envía destLat' })
     @IsNumber({ allowNaN: false, allowInfinity: false })
-    @Min(-180)
-    @Max(180)
+    @IsLongitude()
     destLng?: number;
 }

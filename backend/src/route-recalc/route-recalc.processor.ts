@@ -4,7 +4,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { Job } from 'bullmq';
 import { Booking, BookingStatus } from '../bookings/entities/booking.entity';
-import { BookingStateMachine } from '../bookings/booking-state-machine';
 import { Trip } from '../trips/entities/trip.entity';
 import { TripRoutePlan, RoutePlanStatus, RoutingPreference } from '../trips/entities/trip-route-plan.entity';
 import { TripRouteLeg } from '../trips/entities/trip-route-leg.entity';
@@ -74,8 +73,14 @@ export class RouteRecalcProcessor extends WorkerHost {
           : await this.computeRemove(data);
         if (!recalc) return; // legacy trip with no usable polyline; logged inside
 
-        await this.persistAtomicSwap(recalc);
+        await this.persistAtomicSwap(recalc, data.op === 'add' ? data.bookingId : undefined);
         await this.notifyActivePassengers(recalc.trip.id);
+        if (data.op === 'add') {
+          this.notificationsService.notifyPassengerStatusChange(data.passengerId, {
+            bookingId: data.bookingId,
+            status: 'ACCEPTED',
+          });
+        }
       });
     } catch (err: any) {
       const isFinalAttempt = job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
@@ -102,11 +107,16 @@ export class RouteRecalcProcessor extends WorkerHost {
         relations: ['currentRoutePlan', 'currentRoutePlan.legs'],
       }),
       this.bookingsRepository.find({
-        where: { trip: { id: data.tripId }, status: BookingStatus.ACCEPTED },
+        where: { trip: { id: data.tripId }, status: In([BookingStatus.ACCEPTED, BookingStatus.PENDING_ROUTE_RECALC]) },
         relations: ['passenger'],
       }),
     ]);
     if (!trip) throw new Error(`Trip ${data.tripId} not found`);
+    const targetBooking = acceptedBookings.find(b => b.id === data.bookingId);
+    if (!targetBooking || targetBooking.status !== BookingStatus.PENDING_ROUTE_RECALC) {
+      this.logger.warn(`Booking ${data.bookingId} is no longer pending route recalc; skipping add`);
+      return null;
+    }
 
     const plan = trip.currentRoutePlan;
     if (!plan?.legs?.length) {
@@ -128,7 +138,7 @@ export class RouteRecalcProcessor extends WorkerHost {
     // than passengerId because it can't accidentally drop a different passenger
     // who happens to share the same userId (impossible by schema, but defensive).
     const existingIntermediates = acceptedBookings
-      .filter(b => b.id !== data.bookingId && b.destLat != null && b.destLng != null)
+      .filter(b => b.status === BookingStatus.ACCEPTED && b.id !== data.bookingId && b.destLat != null && b.destLng != null)
       .map(b => ({
         passengerId: b.passenger.id,
         bookingId: b.id,
@@ -165,7 +175,7 @@ export class RouteRecalcProcessor extends WorkerHost {
         relations: ['currentRoutePlan', 'currentRoutePlan.legs'],
       }),
       this.bookingsRepository.find({
-        where: { trip: { id: data.tripId }, status: BookingStatus.ACCEPTED },
+      where: { trip: { id: data.tripId }, status: BookingStatus.ACCEPTED },
         relations: ['passenger'],
       }),
     ]);
@@ -227,7 +237,7 @@ export class RouteRecalcProcessor extends WorkerHost {
    * legDurationsSeconds) were removed in Phase 2 Commit #5 — those columns
    * were dropped by migration 1745900000000.
    */
-  private async persistAtomicSwap(r: RecalcResult): Promise<void> {
+  private async persistAtomicSwap(r: RecalcResult, acceptedBookingId?: string): Promise<void> {
     const { trip, intermediates, origin, finalDest, polylinePoints, legDurations } = r;
 
     const lineString = this.geoService.createLineString(polylinePoints);
@@ -281,6 +291,9 @@ export class RouteRecalcProcessor extends WorkerHost {
 
       // 4. Point the trip at the new plan.
       await manager.update(Trip, trip.id, { currentRoutePlanId: inserted.id });
+      if (acceptedBookingId) {
+        await manager.update(Booking, acceptedBookingId, { status: BookingStatus.ACCEPTED });
+      }
     });
   }
 
@@ -352,11 +365,11 @@ export class RouteRecalcProcessor extends WorkerHost {
           relations: ['trip', 'trip.driver', 'passenger'],
         });
         if (!booking) return;
-        // Abort compensation if the booking is already in a terminal state or
-        // otherwise can't be canceled — prevents double-compensation races.
-        if (!BookingStateMachine.canTransition(booking.status, BookingStatus.CANCELED)) return;
+        // Abort compensation if the booking already left the recalc-pending
+        // state — prevents double-compensation races.
+        if (booking.status !== BookingStatus.PENDING_ROUTE_RECALC) return;
 
-        await manager.update(Booking, booking.id, { status: BookingStatus.CANCELED });
+        await manager.update(Booking, booking.id, { status: BookingStatus.ROUTE_RECALC_FAILED });
         await manager
           .createQueryBuilder()
           .update(Trip)
