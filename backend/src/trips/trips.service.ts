@@ -328,38 +328,6 @@ export class TripsService {
     return combined;
   }
 
-  async getStopsCoverage(
-    stops: Array<{ id: string; lat: number; lng: number }>,
-  ): Promise<Array<{ id: string; covered: boolean }>> {
-    // B-2: process in batches of 5 to avoid 50 simultaneous DB connections
-    const BATCH_SIZE = 5;
-    const results: Array<{ id: string; covered: boolean }> = [];
-
-    for (let i = 0; i < stops.length; i += BATCH_SIZE) {
-      const batch = stops.slice(i, i + BATCH_SIZE);
-      const batchResults = await Promise.all(
-        batch.map(async stop => {
-          // M-2: EXISTS-style query — limit(1) + getRawOne avoids a full COUNT scan
-          // Join the active plan so we can filter by plan."polylineGeom"
-          // (trip."routePolyline" was dropped in migration 1745900000000).
-          const row = await this.tripsRepository.createQueryBuilder('trip')
-            .select('1')
-            .leftJoin('trip.currentRoutePlan', 'plan')
-            .where('trip.status = :status', { status: TripStatus.SCHEDULED })
-            .andWhere('trip.availableSeats > 0')
-            .andWhere('trip.departureTime > :now', { now: new Date() })
-            .andWhere(...this.geoService.getDWithinCondition('plan."polylineGeom"', stop.lat, stop.lng, 600, 'stop'))
-            .limit(1)
-            .getRawOne();
-          return { id: stop.id, covered: !!row };
-        }),
-      );
-      results.push(...batchResults);
-    }
-
-    return results;
-  }
-
   /**
    * Returns the trip with its active route plan and legs attached.
    * Consumers (ActiveTripScreen) use plan.encodedPolyline for the map and

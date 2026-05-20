@@ -14,25 +14,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   fetchAvailableTrips,
-  fetchStopsCoverage,
   fetchActiveDriverTrip,
   fetchMyActiveBooking,
 } from '../api/tripsApi';
 import { axiosClient } from '../api/axiosClient';
-
-const POPULAR_STOPS = [
-  { id: 'jockey',     name: 'Jockey Plaza',           lat: -12.0869, lng: -76.9750 },
-  { id: 'rambla',     name: 'La Rambla San Borja',     lat: -12.0956, lng: -76.9997 },
-  { id: 'arequipa_jp',name: 'Arequipa con Javier Prado', lat: -12.0887, lng: -77.0283 },
-  { id: 'san_luis',   name: 'San Luis',                lat: -12.0750, lng: -76.9820 },
-];
 
 // ─── Query keys (stable references, used for invalidation) ───────────────────
 
 export const QUERY_KEYS = {
   availableTrips: (userLat: number, userLng: number, destLat: number, destLng: number) =>
     ['trips', 'available', userLat, userLng, destLat, destLng] as const,
-  stopsCoverage: () => ['trips', 'stops-coverage'] as const,
   activeDriverTrip: () => ['trips', 'active-driver'] as const,
   myActiveBooking: () => ['bookings', 'active'] as const,
 } as const;
@@ -58,15 +49,6 @@ export const useAvailableTrips = (
       destLat !== null &&
       destLng !== null,
     staleTime: 30_000,
-  });
-
-export const useStopsCoverage = (appMode: string) =>
-  useQuery({
-    queryKey: QUERY_KEYS.stopsCoverage(),
-    queryFn: () => fetchStopsCoverage(POPULAR_STOPS.map(s => ({ id: s.id, lat: s.lat, lng: s.lng }))),
-    enabled: appMode === 'passenger',
-    staleTime: 60_000,
-    select: (data) => data.filter(s => s.covered).map(s => s.id),
   });
 
 export const useActiveDriverTrip = (appMode: string, isDriver: boolean) =>
@@ -167,7 +149,5 @@ export const useHomeInvalidators = () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.myActiveBooking() }),
     invalidateAvailableTrips: () =>
       queryClient.invalidateQueries({ queryKey: ['trips', 'available'] }),
-    invalidateStopsCoverage: () =>
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.stopsCoverage() }),
   };
 };

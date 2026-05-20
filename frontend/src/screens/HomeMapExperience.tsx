@@ -3,7 +3,7 @@
  *
  * Phase 4 changes:
  * - All data fetching replaced with React Query hooks (useAvailableTrips,
- *   useStopsCoverage, useActiveDriverTrip, useMyActiveBooking).
+ *   useActiveDriverTrip, useMyActiveBooking).
  * - Socket event handlers use queryClient.invalidateQueries instead of
  *   manually calling fetch functions via stable refs.
  * - TripSheet and DriverTripPanel extracted to separate component files.
@@ -31,7 +31,6 @@ import type { Socket } from 'socket.io-client';
 import type { TripMarker, ActiveBooking } from '../api/tripsApi';
 import {
   useAvailableTrips,
-  useStopsCoverage,
   useActiveDriverTrip,
   useMyActiveBooking,
   useHomeInvalidators,
@@ -49,15 +48,6 @@ import { DriverTripPanel } from './components/DriverTripPanel';
 
 const GOOGLE_MAPS_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_KEY || 'DUMMY_KEY';
 const { height } = Dimensions.get('window');
-
-// ─── Popular stops (also used in useStopsCoverage hook) ──────────────────────
-
-const POPULAR_STOPS = [
-  { id: 'jockey',      name: 'Jockey Plaza',            lat: -12.0869, lng: -76.9750 },
-  { id: 'rambla',      name: 'La Rambla San Borja',      lat: -12.0956, lng: -76.9997 },
-  { id: 'arequipa_jp', name: 'Arequipa con Javier Prado', lat: -12.0887, lng: -77.0283 },
-  { id: 'san_luis',    name: 'San Luis',                 lat: -12.0750, lng: -76.9820 },
-];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -151,7 +141,6 @@ export const HomeMapExperience = () => {
     destLng,
   );
 
-  const { data: coveredStops = [] } = useStopsCoverage(appMode);
   const { data: activeDriverTrip = null, refetch: refetchDriverTrip } = useActiveDriverTrip(appMode, isDriver);
   const { data: myActiveBooking = null, refetch: refetchMyBooking } = useMyActiveBooking(appMode);
 
@@ -408,7 +397,6 @@ export const HomeMapExperience = () => {
     });
 
     socket.on('trip_published', () => {
-      invalidators.invalidateStopsCoverage();
       invalidators.invalidateAvailableTrips();
     });
 
@@ -646,12 +634,6 @@ export const HomeMapExperience = () => {
     destInputRef.current?.clear();
   };
 
-  const handleStopTap = (stop: typeof POPULAR_STOPS[0]) => {
-    setDestLat(stop.lat);
-    setDestLng(stop.lng);
-    destInputRef.current?.setAddressText(stop.name);
-  };
-
   const toggleAppMode = (mode: 'driver' | 'passenger') => {
     setAppMode(mode);
   };
@@ -681,23 +663,6 @@ export const HomeMapExperience = () => {
             }}
             showsUserLocation
           >
-            {/* Popular stop markers */}
-            {appMode === 'passenger' &&
-              POPULAR_STOPS.filter(s => coveredStops.includes(s.id)).map(stop => (
-                <Marker
-                  key={`stop-${stop.id}`}
-                  coordinate={{ latitude: stop.lat, longitude: stop.lng }}
-                  onPress={() => handleStopTap(stop)}
-                >
-                  <View style={styles.stopMarker}>
-                    <Ionicons name="location" size={13} color="#FFF" />
-                    <Text style={styles.stopMarkerText} numberOfLines={1}>
-                      {stop.name.split(' ')[0]}
-                    </Text>
-                  </View>
-                </Marker>
-              ))}
-
             {/* Route-to-dropoff polyline + marker */}
             {routeToDropoff.length > 0 && (
               <Polyline coordinates={routeToDropoff} strokeColor="#0EA5E9" strokeWidth={5} />
@@ -1336,12 +1301,6 @@ const styles = StyleSheet.create({
   tripCardBookBtnText: { fontSize: 13, color: '#FFF', fontWeight: '700' },
 
   // Map markers
-  stopMarker: {
-    flexDirection: 'row', alignItems: 'center', gap: 3,
-    backgroundColor: '#0EA5E9', paddingHorizontal: 6, paddingVertical: 3,
-    borderRadius: 10, borderWidth: 1.5, borderColor: '#FFF',
-  },
-  stopMarkerText: { fontSize: 10, color: '#FFF', fontWeight: '700', maxWidth: 60 },
   dropoffMarker: {
     flexDirection: 'row', alignItems: 'center', gap: 3,
     backgroundColor: '#7C3AED', paddingHorizontal: 7, paddingVertical: 4,

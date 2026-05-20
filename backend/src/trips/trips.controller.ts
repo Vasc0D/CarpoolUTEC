@@ -47,35 +47,6 @@ export class TripsController {
     return this.tripsService.findAvailableTrips(parsedLat, parsedLng, parsedDestLat, parsedDestLng, req.user.id);
   }
 
-  @Get('stops-coverage')
-  getStopsCoverage(@Query('stops') stopsJson: string) {
-    if (!stopsJson) throw new BadRequestException('Se requiere el parámetro stops');
-
-    // M-4: validate stops shape and coordinate ranges before passing to service
-    let stops: Array<{ id: string; lat: number; lng: number }>;
-    try {
-      stops = JSON.parse(stopsJson);
-    } catch {
-      throw new BadRequestException('stops debe ser un JSON válido');
-    }
-
-    if (!Array.isArray(stops) || stops.length === 0)
-      throw new BadRequestException('stops debe ser un array no vacío');
-    if (stops.length > 50)
-      throw new BadRequestException('stops no puede contener más de 50 elementos');
-
-    for (const s of stops) {
-      if (typeof s.id !== 'string' || !s.id.trim())
-        throw new BadRequestException('Cada stop debe tener un campo "id" de tipo string');
-      if (typeof s.lat !== 'number' || s.lat < -90 || s.lat > 90)
-        throw new BadRequestException(`Stop "${s.id}": lat debe ser un número entre -90 y 90`);
-      if (typeof s.lng !== 'number' || s.lng < -180 || s.lng > 180)
-        throw new BadRequestException(`Stop "${s.id}": lng debe ser un número entre -180 y 180`);
-    }
-
-    return this.tripsService.getStopsCoverage(stops);
-  }
-
   @Get('my-trips')
   getMyTrips(
     @Req() req,

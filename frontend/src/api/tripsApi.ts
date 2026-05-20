@@ -72,11 +72,6 @@ export interface ActiveBooking {
   };
 }
 
-export interface StopCoverage {
-  id: string;
-  covered: boolean;
-}
-
 // ─── Fetchers ─────────────────────────────────────────────────────────────────
 
 export const fetchAvailableTrips = async (
@@ -87,15 +82,6 @@ export const fetchAvailableTrips = async (
 ): Promise<TripMarker[]> => {
   const { data } = await axiosClient.get<TripMarker[]>('/trips', {
     params: { lat: userLat, lng: userLng, destLat, destLng },
-  });
-  return data ?? [];
-};
-
-export const fetchStopsCoverage = async (
-  stops: Array<{ id: string; lat: number; lng: number }>,
-): Promise<StopCoverage[]> => {
-  const { data } = await axiosClient.get<StopCoverage[]>('/trips/stops-coverage', {
-    params: { stops: JSON.stringify(stops) },
   });
   return data ?? [];
 };
